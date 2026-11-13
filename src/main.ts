@@ -554,7 +554,6 @@ async function app() {
           <button id="add" class="rounded-md px-2 py-0.5 normal-case tracking-normal text-amber-400 hover:bg-zinc-800">+ New</button>
         </div>
         <nav id="list" class="flex-1 space-y-0.5 overflow-auto px-3 pb-3"></nav>
-        <div id="where" class="truncate border-t border-zinc-800 px-5 py-2 font-mono text-[11px] text-zinc-500"></div>
       </aside>
       <main class="flex min-w-0 flex-1 flex-col">
         <div id="tabs" class="flex h-11 shrink-0 items-end gap-1 overflow-x-auto border-b border-zinc-800 bg-zinc-900 px-2"></div>
@@ -574,19 +573,20 @@ async function app() {
         ${appTile("post", "post", "Sun Post")}
         ${appTile("notepad", "notepad", "Notepad")}
       </div>
-      <div class="mt-auto font-mono text-[11px] text-zinc-500">/</div>
     </div>
-    <!-- Idle: a small half-circle handle. Hover, keyboard focus, a tap, or an open switcher grows it to full size. -->
-    <nav id="navbar" tabindex="-1" aria-label="Navigation" class="group/nav fixed bottom-0 left-1/2 z-[75] flex h-4 w-20 -translate-x-1/2 items-center justify-around rounded-t-full border border-b-0 border-zinc-700 bg-zinc-900/70 px-7 pt-1.5 text-zinc-300 opacity-60 shadow-[0_-8px_24px_rgb(0_0_0/0.35)] outline-none backdrop-blur-md transition-all duration-200 ease-out
-      before:absolute before:-inset-x-10 before:-top-6 before:bottom-0 before:content-['']
-      hover:h-12 hover:w-56 hover:bg-zinc-900/90 hover:opacity-100 focus-within:h-12 focus-within:w-56 focus-within:opacity-100 [&.open]:h-12 [&.open]:w-56 [&.open]:opacity-100
-      [&>button]:opacity-0 [&>button]:transition-opacity hover:[&>button]:opacity-100 focus-within:[&>button]:opacity-100 [&.open>button]:opacity-100">
-      <button id="nav-back" title="Back" aria-label="Back" class="grid h-9 w-9 place-items-center rounded-full hover:bg-zinc-700 hover:text-zinc-100 active:scale-90">${icon("navBack", "h-5 w-5")}</button>
-      <button id="nav-home" title="Home" aria-label="Home" class="grid h-9 w-9 place-items-center rounded-full hover:bg-zinc-700 hover:text-zinc-100 active:scale-90">${icon("navHome", "h-5 w-5")}</button>
-      <button id="nav-apps" title="Running apps" aria-label="Running apps" class="relative grid h-9 w-9 place-items-center rounded-full hover:bg-zinc-700 hover:text-zinc-100 active:scale-90 [&.on]:text-amber-400">
-        ${icon("navApps", "h-5 w-5")}
+    <!-- Current path, bottom-left on every screen -->
+    <div id="path" class="pointer-events-none fixed bottom-2 left-3 z-[70] max-w-[60vw] truncate px-2 py-0.5 font-mono text-[11px] text-zinc-500"></div>
+    <!-- Floating ball (like iPhone AssistiveTouch): drag anywhere, snaps to the nearest side; tap opens Back / Home / Apps. -->
+    <nav id="navbar" aria-label="Navigation" class="group/nav fixed z-[75] h-12 w-12 select-none" style="right:12px;bottom:96px">
+      <button id="nav-ball" title="Navigation (drag to move)" aria-label="Navigation" class="relative grid h-12 w-12 touch-none place-items-center rounded-full border border-white/10 bg-zinc-900/60 opacity-70 shadow-[0_8px_24px_rgb(0_0_0/0.35)] backdrop-blur-md transition-[opacity,transform] hover:opacity-100 active:scale-95 group-[.open]/nav:opacity-100">
+        <span class="h-7 w-7 rounded-full bg-white/70 ring-[5px] ring-white/25"></span>
         <span id="sw-n" class="absolute -right-0.5 -top-0.5 hidden min-w-4 rounded-full bg-amber-500 px-1 text-center text-[10px] font-bold leading-4 text-black">0</span>
       </button>
+      <div id="nav-menu" class="absolute top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded-full border border-zinc-700 bg-zinc-900/90 p-1.5 text-zinc-300 shadow-2xl shadow-black/50 backdrop-blur-md group-[.open]/nav:flex">
+        <button id="nav-back" title="Back" aria-label="Back" class="grid h-9 w-9 place-items-center rounded-full hover:bg-zinc-700 hover:text-zinc-100 active:scale-90">${icon("navBack", "h-5 w-5")}</button>
+        <button id="nav-home" title="Home" aria-label="Home" class="grid h-9 w-9 place-items-center rounded-full hover:bg-zinc-700 hover:text-zinc-100 active:scale-90">${icon("navHome", "h-5 w-5")}</button>
+        <button id="nav-apps" title="Running apps" aria-label="Running apps" class="grid h-9 w-9 place-items-center rounded-full hover:bg-zinc-700 hover:text-zinc-100 active:scale-90 [&.on]:text-amber-400">${icon("navApps", "h-5 w-5")}</button>
+      </div>
     </nav>
     <div id="switcher" class="fixed inset-0 z-[60] hidden flex-col bg-black/75 p-8 text-zinc-100 backdrop-blur-md">
       <div class="flex items-center gap-4">
@@ -945,10 +945,16 @@ async function app() {
         ${backBtn('id="np-close"', "Main display")}
         ${appTitle("notepad", "Notepad", "Plain text, saved automatically")}
         <span id="np-info" class="ml-auto font-mono text-xs text-zinc-500"></span>
+        <button id="np-newdir" title="New folder" class="ml-3 flex items-center gap-1.5 rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800">${icon("folder")} Folder</button>
         <button id="np-new" title="New note" class="ml-3 flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-sm font-semibold text-black hover:bg-amber-400">${icon("plus")} New</button>
       </div>
-      <div id="np-list" class="mt-6 min-h-0 flex-1 space-y-1 overflow-auto rounded-2xl border border-zinc-800 bg-zinc-900 p-2"></div>
-      <textarea id="np-text" spellcheck="false" placeholder="Type anything…" class="mt-6 hidden min-h-0 flex-1 resize-none rounded-2xl border border-zinc-800 bg-zinc-900 p-5 font-mono text-sm leading-relaxed text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-amber-500"></textarea>
+      <div class="mt-6 flex min-h-0 flex-1 gap-6">
+        <aside id="np-side" class="w-[10%] min-w-40 shrink-0 overflow-auto rounded-2xl border border-zinc-800 bg-zinc-900 p-3"></aside>
+        <div class="flex min-w-0 flex-1 flex-col">
+      <div id="np-list" class="grid min-h-0 flex-1 auto-rows-min grid-cols-[repeat(auto-fill,7.5rem)] content-start gap-2 overflow-auto p-1"></div>
+      <textarea id="np-text" spellcheck="false" placeholder="Type anything…" class="hidden min-h-0 flex-1 resize-none rounded-2xl border border-zinc-800 bg-zinc-900 p-5 font-mono text-sm leading-relaxed text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-amber-500"></textarea>
+        </div>
+      </div>
     </div>
     <dialog id="manual"class="fixed inset-0 m-auto h-[90vh] w-[60rem] max-w-[94vw] rounded-2xl border border-zinc-800 bg-zinc-900 p-0 text-zinc-100 backdrop:bg-black/70">
       <div class="flex h-full flex-col">
@@ -1144,6 +1150,8 @@ async function app() {
   try { postHist = JSON.parse(localStorage.postHist ?? "[]"); } catch {} // corrupt → start empty
   let postRes = { body: "", heads: "" }, postShowHeads = false;
   const postField = (n: string) => postForm.elements.namedItem(n) as HTMLInputElement;
+  postForm.addEventListener("input", showWhere); // path shows the method + URL being edited
+  postForm.addEventListener("change", showWhere);
   const drawPostOut = () => {
     $("#post-out").textContent = postShowHeads ? postRes.heads : postRes.body;
     $("#post-tab").textContent = postShowHeads ? "Body" : "Headers";
@@ -1159,7 +1167,7 @@ async function app() {
   $("#post-clear").onclick = () => ((postHist = []), (localStorage.postHist = "[]"), drawHist());
   $("#post-hist").onclick = (e) => {
     const r = postHist[+((e.target as HTMLElement).closest<HTMLElement>("[data-h]")?.dataset.h ?? -1)];
-    if (r) (["m", "u", "h", "b"] as const).forEach((k) => (postField(k).value = r[k]));
+    if (r) (["m", "u", "h", "b"] as const).forEach((k) => (postField(k).value = r[k])), showWhere();
   };
   postForm.onsubmit = async (e) => {
     e.preventDefault();
@@ -1231,7 +1239,7 @@ async function app() {
       }).join("");
     drawDay();
   };
-  const calPick = (d: Date) => ((calSel = d), (calM = new Date(d.getFullYear(), d.getMonth(), 1)), drawCal());
+  const calPick = (d: Date) => ((calSel = d), (calM = new Date(d.getFullYear(), d.getMonth(), 1)), drawCal(), showWhere());
   $("[data-calendar]").onclick = () => (calPick(new Date()), calPage.classList.replace("hidden", "flex"));
   $("#cal-prev").onclick = () => ((calM = new Date(calM.getFullYear(), calM.getMonth() - 1, 1)), drawCal());
   $("#cal-next").onclick = () => ((calM = new Date(calM.getFullYear(), calM.getMonth() + 1, 1)), drawCal());
@@ -1279,7 +1287,12 @@ async function app() {
   $("#cal-close").onclick = () => calPage.classList.replace("flex", "hidden");
 
   // ----- Notepad: a list of plain-text notes (newest edit first); open one to edit, saved on every keystroke -----
-  type Note = { id: number; name: string; text: string; t: number };
+  type Note = { id: number; name: string; text: string; t: number; folder?: string };
+  // ponytail: one level of folders (no folders inside folders), add nesting if people ask
+  let npDirs: string[] = [];
+  try { npDirs = JSON.parse(localStorage.notepadFolders ?? "[]"); } catch {}
+  let npDir: string | null = null; // folder being viewed, null = top level
+  const npSaveDirs = () => (localStorage.notepadFolders = JSON.stringify(npDirs));
   const npPage = $("#notepad"), npText = $<HTMLTextAreaElement>("#np-text"), npList = $("#np-list");
   let notes: Note[] = [];
   try { notes = JSON.parse(localStorage.notepadFiles ?? "[]"); } catch {} // corrupt → start empty
@@ -1288,33 +1301,149 @@ async function app() {
   let npOpen: Note | null = null;
   const npSave = () => (localStorage.notepadFiles = JSON.stringify(notes));
   const stamp = (t: number) => new Date(t).toLocaleString("sv").slice(0, 16); // 2026-11-12 15:30
-  const npInfo = () =>
-    ($("#np-info").textContent = npOpen ? `${npOpen.name} · ${npText.value.split("\n").length} lines · ${npText.value.length} chars` : `${notes.length} notes`);
+  const npInfo = () => (showWhere(),
+    $("#np-info").textContent = npOpen
+      ? `${npOpen.folder ? `${npOpen.folder} / ` : ""}${npOpen.name} · ${npText.value.split("\n").length} lines · ${npText.value.length} chars`
+      : npDir ? `${npDir} · ${notes.filter((n) => n.folder === npDir).length} notes` : `${notes.length} notes`);
+  // sidebar: pinned notes/folders ("n:<id>" | "d:<name>") + the 10 most recently opened notes (ids, newest first)
+  const npLoad = (k: string): (string | number)[] => {
+    try { return JSON.parse(localStorage[k] ?? "[]"); } catch { return []; }
+  };
+  let npPins = npLoad("notepadPins") as string[], npRecent = npLoad("notepadRecent") as number[];
+  const npSaveSide = () => ((localStorage.notepadPins = JSON.stringify(npPins)), (localStorage.notepadRecent = JSON.stringify(npRecent)));
+  const npKey = (x: Note | string) => (typeof x === "string" ? `d:${x}` : `n:${x.id}`);
+  const npTogglePin = (x: Note | string) => {
+    const k = npKey(x);
+    npPins = npPins.includes(k) ? npPins.filter((p) => p !== k) : [...npPins, k];
+    npSaveSide();
+    npSideDraw();
+  };
+  const npPinItem = (x: Note | string): MenuItem => npPins.includes(npKey(x)) ? ["Unpin", "x", () => npTogglePin(x)] : ["Pin to sidebar", "plus", () => npTogglePin(x)];
+  const npSideDraw = () => {
+    const byId = new Map(notes.map((n) => [n.id, n]));
+    npPins = npPins.filter((p) => (p[0] === "d" ? npDirs.includes(p.slice(2)) : byId.has(+p.slice(2)))); // drop deleted ones
+    npRecent = npRecent.filter((id) => byId.has(id));
+    const row = (attr: string, ic: string, name: string, sub: string, on: boolean) =>
+      `<button ${attr} class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left ${on ? "bg-amber-500/15 text-amber-400" : "hover:bg-zinc-800"}">
+        ${icon(ic as keyof typeof ICONS, `h-4 w-4 shrink-0 ${ic === "folder" ? "text-amber-400" : "text-zinc-400"}`)}
+        <span class="min-w-0 flex-1 truncate text-sm">${esc(name)}</span>${sub ? `<span class="shrink-0 font-mono text-[10px] text-zinc-500">${sub}</span>` : ""}</button>`;
+    const head = (t: string) => `<p class="px-2.5 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-zinc-500">${t}</p>`;
+    const pins = npPins.map((p) =>
+      p[0] === "d"
+        ? row(`data-sdir="${esc(p.slice(2))}"`, "folder", p.slice(2), "", npDir === p.slice(2) && !npOpen)
+        : row(`data-sn="${p.slice(2)}"`, "file", byId.get(+p.slice(2))!.name, "", npOpen?.id === +p.slice(2)));
+    const recent = npRecent.map((id) => byId.get(id)!).map((n) => row(`data-sn="${n.id}"`, "file", n.name, new Date(n.t).toLocaleTimeString("sv").slice(0, 5), npOpen?.id === n.id));
+    $("#np-side").innerHTML =
+      head("Pinned") + (pins.join("") || `<p class="px-2.5 py-1 text-xs text-zinc-600">Right-click a note or folder → Pin</p>`) +
+      `<div class="my-2 border-t border-zinc-800"></div>` +
+      head("Recent") + (recent.join("") || `<p class="px-2.5 py-1 text-xs text-zinc-600">Notes you open show up here</p>`);
+  };
+  $("#np-side").onclick = (e) => {
+    const t = e.target as Element, n = t.closest<HTMLElement>("[data-sn]"), d = t.closest<HTMLElement>("[data-sdir]");
+    if (n) npShow(notes.find((x) => x.id === +n.dataset.sn!) ?? null);
+    else if (d) (npDir = d.dataset.sdir!), npShow(null);
+  };
+  $("#np-side").oncontextmenu = (e) => {
+    const t = e.target as Element, n = t.closest<HTMLElement>("[data-sn]"), d = t.closest<HTMLElement>("[data-sdir]")?.dataset.sdir;
+    const note = n && notes.find((x) => x.id === +n.dataset.sn!);
+    if (note) contextMenu(e, [["Open", "file", () => npShow(note)], npPinItem(note), ...(npRecent.includes(note.id) ? [["Remove from recent", "x", () => ((npRecent = npRecent.filter((id) => id !== note.id)), npSaveSide(), npSideDraw())] as MenuItem] : [])]);
+    else if (d) contextMenu(e, [["Open", "folder", () => ((npDir = d), npShow(null))], npPinItem(d)]);
+    else e.preventDefault();
+  };
   const npShow = (n: Note | null) => {
     npOpen = n;
     npList.classList.toggle("hidden", !!n);
     npText.classList.toggle("hidden", !n);
     $("#np-new").classList.toggle("hidden", !!n);
+    $("#np-newdir").classList.toggle("hidden", !!n || !!npDir);
+    if (n) npRecent = [n.id, ...npRecent.filter((id) => id !== n.id)].slice(0, 10), npSaveSide();
+    npSideDraw();
     if (n) (npText.value = n.text), npText.focus();
     else npDraw();
     npInfo();
   };
+  // 3D-ish icons for the Notepad grid; gradient ids must be unique per instance (hidden duplicates break url(#id))
+  let npSeq = 0;
+  const npPaper = (x: number, r: number) =>
+    `<g transform="rotate(${r} ${x + 14} 40)"><rect x="${x}" y="9" width="28" height="36" rx="2" fill="#fff" stroke="#d4d4d8" stroke-width=".6"/>
+     <path d="M${x + 5} 16h18M${x + 5} 21h14M${x + 5} 26h18M${x + 5} 31h11" stroke="#a1a1aa" stroke-width="1.6" stroke-linecap="round"/></g>`;
+  const npFolderSvg = (count: number) => {
+    const k = ++npSeq;
+    return `<svg viewBox="0 0 64 56" class="h-20 w-20 drop-shadow-[0_6px_8px_rgb(0_0_0/0.18)]" aria-hidden="true">
+      <defs>
+        <linearGradient id="npfb${k}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f5c542"/><stop offset="1" stop-color="#d99a0b"/></linearGradient>
+        <linearGradient id="npff${k}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffe9a3"/><stop offset=".55" stop-color="#fcd25a"/><stop offset="1" stop-color="#f0b429"/></linearGradient>
+      </defs>
+      <path d="M5 6a3 3 0 0 1 3-3h15l5 5h28a3 3 0 0 1 3 3v38a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3Z" fill="url(#npfb${k})"/>
+      ${count > 1 ? npPaper(26, 7) : ""}${count > 0 ? npPaper(16, -4) : ""}
+      <path d="M3 22a3 3 0 0 1 3-3h52a3 3 0 0 1 3 3.3l-2.6 26.4A3 3 0 0 1 55.4 51H8.6a3 3 0 0 1-3-2.7Z" fill="url(#npff${k})"/>
+      <path d="M6.5 20.5h51" stroke="#fff" stroke-opacity=".75" stroke-width="1.2" stroke-linecap="round"/>
+    </svg>`;
+  };
+  const npNoteSvg = () => {
+    const k = ++npSeq;
+    return `<svg viewBox="0 0 64 64" class="h-20 w-20 drop-shadow-[0_6px_8px_rgb(0_0_0/0.18)]" aria-hidden="true">
+      <defs>
+        <linearGradient id="npn${k}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#e7e5e4"/></linearGradient>
+        <linearGradient id="npc${k}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fde68a"/><stop offset="1" stop-color="#f59e0b"/></linearGradient>
+      </defs>
+      <path d="M14 4h26l12 12v42a3 3 0 0 1-3 3H14a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3Z" fill="url(#npn${k})" stroke="#d6d3d1" stroke-width=".8"/>
+      <rect x="11.4" y="4.4" width="28" height="7" rx="2.6" fill="#fbbf24" opacity=".9"/>
+      <path d="M40 4v9a3 3 0 0 0 3 3h9Z" fill="url(#npc${k})"/>
+      <path d="M18 24h22M18 30h26M18 36h20M18 42h26M18 48h14" stroke="#a8a29e" stroke-width="2" stroke-linecap="round"/>
+    </svg>`;
+  };
   const npDraw = () => {
     notes.sort((a, b) => b.t - a.t);
-    npList.innerHTML = notes.length
-      ? notes.map((n, i) => `<button data-n="${i}" class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-zinc-800">
-          ${icon("file", "h-4 w-4 text-amber-400")}
-          <span class="min-w-0 flex-1"><span class="block truncate text-sm font-medium">${esc(n.name)}</span>
-          <span class="block truncate text-xs text-zinc-500">${esc(n.text.slice(0, 120).replace(/\s+/g, " ")) || "Empty"}</span></span>
-          <span class="shrink-0 font-mono text-[11px] text-zinc-500">${stamp(n.t)}</span></button>`).join("")
-      : `<p class="grid h-full place-items-center text-sm text-zinc-500">No notes yet. Press New or right-click → New note.</p>`;
+    const dirs = npDir ? [] : npDirs;
+    const here = notes.map((n, i) => [n, i] as const).filter(([n]) => (n.folder ?? null) === npDir);
+    npList.innerHTML = dirs.length || here.length
+      ? dirs.map((d) => {
+          const k = notes.filter((n) => n.folder === d).length;
+          return `<button data-dir="${esc(d)}" title="${esc(d)} · ${k} notes" class="flex flex-col items-center gap-1 rounded-xl border border-transparent p-2 text-center transition hover:border-amber-500/40 hover:bg-amber-500/10 focus-visible:border-amber-500/60 focus-visible:outline-none">
+            ${npFolderSvg(k)}
+            <span class="line-clamp-2 w-full break-words text-xs">${esc(d)}</span></button>`;
+        }).join("") +
+        here.map(([n, i]) => `<button data-n="${i}" title="${esc(n.name)}\n${esc(n.text.slice(0, 200))}" class="flex flex-col items-center gap-1 rounded-xl border border-transparent p-2 text-center transition hover:border-amber-500/40 hover:bg-amber-500/10 focus-visible:border-amber-500/60 focus-visible:outline-none">
+            ${npNoteSvg()}
+            <span class="line-clamp-2 w-full break-words text-xs">${esc(n.name)}</span></button>`).join("")
+      : `<p class="col-span-full grid h-60 place-items-center text-sm text-zinc-500">${npDir ? "Empty folder. Press New to add a note here." : "No notes yet. Press New or right-click → New note."}</p>`;
+    npSideDraw(); // names/moves/deletes show in the sidebar too
   };
   const npNew = () => {
-    const n = { id: Date.now(), name: stamp(Date.now()), text: "", t: Date.now() };
+    const n: Note = { id: Date.now(), name: stamp(Date.now()), text: "", t: Date.now(), folder: npDir ?? undefined };
     notes.push(n);
     npSave();
     npShow(n);
   };
+  const npOpenDir = (d: string | null) => ((npDir = d), npShow(null));
+  const npNewDir = async () => {
+    const name = await inputBox("New folder", "Notepad", "Create", "folder", "Folder name");
+    if (!name || npDirs.includes(name)) return;
+    npDirs.push(name);
+    npDirs.sort((a, b) => a.localeCompare(b));
+    npSaveDirs();
+    npDraw();
+    npInfo();
+  };
+  const npRenameDir = async (d: string) => {
+    const ask = inputBox("Rename folder", d, "Rename", "folder", "Folder name");
+    $<HTMLInputElement>("#confirm-input").value = d;
+    $<HTMLButtonElement>("#confirm-ok").disabled = false;
+    const name = await ask;
+    if (!name || name === d || npDirs.includes(name)) return;
+    npDirs = npDirs.map((x) => (x === d ? name : x));
+    notes.forEach((n) => n.folder === d && (n.folder = name));
+    npPins = npPins.map((p) => (p === `d:${d}` ? `d:${name}` : p));
+    npSaveSide();
+    npSaveDirs();
+    npSave();
+    npDraw();
+  };
+  const npMoveItems = (n: Note): MenuItem[] => [
+    ...npDirs.filter((d) => d !== n.folder).map((d): MenuItem => [`Move to ${d}`, "folder", () => ((n.folder = d), npSave(), npDraw(), npInfo())]),
+    ...(n.folder ? [[`Move out of ${n.folder}`, "folder", () => ((n.folder = undefined), npSave(), npDraw(), npInfo())] as MenuItem] : []),
+  ];
   const npRename = async (n: Note) => {
     const ask = inputBox("Rename note", n.name, "Rename", "file", "Note name");
     $<HTMLInputElement>("#confirm-input").value = n.name; // start from the current name
@@ -1336,16 +1465,20 @@ async function app() {
     npText.dispatchEvent(new Event("input"));
   };
   npList.onclick = (e) => {
-    const b = (e.target as Element).closest<HTMLElement>("[data-n]");
+    const t = e.target as Element, b = t.closest<HTMLElement>("[data-n]"), d = t.closest<HTMLElement>("[data-dir]");
     if (b) npShow(notes[+b.dataset.n!]);
+    else if (d) npOpenDir(d.dataset.dir!);
   };
   npList.oncontextmenu = (e) => {
-    const b = (e.target as Element).closest<HTMLElement>("[data-n]");
+    const t = e.target as Element, b = t.closest<HTMLElement>("[data-n]"), d = t.closest<HTMLElement>("[data-dir]")?.dataset.dir;
     const n = b && notes[+b.dataset.n!];
+    const blank: MenuItem[] = [["New note", "plus", npNew], ...(npDir ? [] : [["New folder", "folder", npNewDir] as MenuItem])];
     contextMenu(e, n
       ? [
           ["Open", "file", () => npShow(n)],
+          npPinItem(n),
           ["Rename…", "pencil", () => npRename(n)],
+          ...npMoveItems(n),
           ["New note", "plus", npNew],
           ["Delete", "trash", async () => {
             if (!(await confirmBox("Delete note?", n.name, "Delete"))) return;
@@ -1354,12 +1487,29 @@ async function app() {
             npShow(null);
           }],
         ]
-      : [["New note", "plus", npNew]]);
+      : d
+        ? [
+            ["Open", "folder", () => npOpenDir(d)],
+            npPinItem(d),
+            ["Rename…", "pencil", () => npRenameDir(d)],
+            ["Delete folder", "trash", async () => {
+              const k = notes.filter((n) => n.folder === d).length;
+              if (!(await confirmBox("Delete folder?", `${d}${k ? ` (its ${k} notes move to the top level)` : ""}`, "Delete"))) return;
+              npDirs = npDirs.filter((x) => x !== d);
+              notes.forEach((n) => n.folder === d && (n.folder = undefined)); // keep the notes, just unfile them
+              npSaveDirs();
+              npSave();
+              npDraw();
+              npInfo();
+            }],
+          ]
+        : blank);
   };
   $("#np-new").onclick = npNew;
-  $("[data-notepad]").onclick = () => (npShow(null), npPage.classList.replace("hidden", "flex"));
-  // Back: from a note to the list, from the list to the main display
-  $("#np-close").onclick = () => (npOpen ? npShow(null) : npPage.classList.replace("flex", "hidden"));
+  $("#np-newdir").onclick = npNewDir;
+  $("[data-notepad]").onclick = () => ((npDir = null), npShow(null), npPage.classList.replace("hidden", "flex"));
+  // Back: note → its list, folder → top level, top level → main display
+  $("#np-close").onclick = () => (npOpen ? npShow(null) : npDir ? npOpenDir(null) : npPage.classList.replace("flex", "hidden"));
 
   // BaseCurves app (Navicat-style): toolbar · connection tree · Objects / table Data / Query views.
   const bc = $("#bc");
@@ -1383,7 +1533,9 @@ async function app() {
 
   // ----- views -----
   type View = "objects" | "data" | "query";
+  let bcV: View = "objects"; // shown in the bottom-left path
   const bcView = (v: View) => {
+    bcV = v;
     bc.querySelectorAll<HTMLElement>("[data-view]").forEach((s) => (s.classList.toggle("hidden", s.dataset.view !== v), s.classList.toggle("flex", s.dataset.view === v)));
     $("#bc-views").querySelectorAll<HTMLElement>("[data-v]").forEach((b) => b.classList.toggle("on", b.dataset.v === v));
     $("#bc-v-objects").classList.toggle("on", v === "objects");
@@ -1937,6 +2089,29 @@ async function app() {
   const PAGES: Record<string, string> = { basecurves: "#bc", calendar: "#cal", post: "#post", notepad: "#notepad", settings: "#settings" };
   const screenNow = () =>
     Object.keys(PAGES).find((k) => !$(PAGES[k]).classList.contains("hidden")) ?? ($("#launcher").classList.contains("hidden") ? "devops" : "home");
+  pathOf = () => {
+    const s = screenNow();
+    if (s === "home") return "/";
+    if (s === "devops") return tabs.find((t) => t.key === activeKey)?.where ?? "/devops";
+    if (s === "notepad") return ["/notepad", npOpen?.folder ?? npDir, npOpen?.name].filter(Boolean).join("/");
+    if (s === "calendar") return `/calendar/${calKey(calSel)}`;
+    if (s === "basecurves") {
+      const c = bcConn();
+      if (!c) return "/basecurves";
+      return ["/basecurves", c.name, bcCurDb, bcV === "data" ? bcTable : bcV === "query" ? "query" : bcSel].filter(Boolean).join("/");
+    }
+    if (s === "post") {
+      const u = postField("u").value.trim().replace(/^https?:\/\//, "");
+      return u ? `/post/${postField("m").value} ${u}` : "/post";
+    }
+    if (s === "settings") return `/settings/theme/${themeName()}`;
+    return `/${s}`;
+  };
+  // any screen switch is a class change somewhere; redraw the path once per frame
+  let pathQueued = false;
+  new MutationObserver(() => pathQueued || ((pathQueued = true), requestAnimationFrame(() => ((pathQueued = false), showWhere()))))
+    .observe(document.body, { attributes: true, attributeFilter: ["class"], subtree: true });
+  showWhere();
   const navHist: string[] = [];
   let navigating = false;
   const hideAll = () => {
@@ -1972,6 +2147,51 @@ async function app() {
     goTo(prev ?? "home");
   };
   $("#nav-apps").onclick = () => swShow($("#switcher").classList.contains("hidden"));
+  // floating ball: drag to move (snaps to the nearest side, remembered), tap to open/close the menu
+  {
+    const nav = $("#navbar"), ball = $("#nav-ball"), menu = $("#nav-menu");
+    const place = (x: number, y: number) => {
+      x = Math.max(8, Math.min(innerWidth - 56, x));
+      y = Math.max(8, Math.min(innerHeight - 56, y));
+      Object.assign(nav.style, { left: `${x}px`, top: `${y}px`, right: "", bottom: "" });
+      const onRight = x > innerWidth / 2; // menu opens toward the middle of the screen
+      menu.style.left = onRight ? "" : "3.5rem";
+      menu.style.right = onRight ? "3.5rem" : "";
+    };
+    const snap = () => {
+      const r = nav.getBoundingClientRect();
+      place(r.left + 24 > innerWidth / 2 ? innerWidth : 0, r.top);
+      localStorage.navBall = JSON.stringify([nav.style.left === "8px" ? "l" : "r", r.top / innerHeight]);
+    };
+    try {
+      const [side, fy] = JSON.parse(localStorage.navBall);
+      place(side === "l" ? 0 : innerWidth, fy * innerHeight);
+    } catch { place(innerWidth, innerHeight - 150); }
+    addEventListener("resize", snap);
+    let start: { x: number; y: number; dx: number; dy: number } | null = null, moved = false;
+    ball.onpointerdown = (e) => {
+      const r = nav.getBoundingClientRect();
+      start = { x: e.clientX, y: e.clientY, dx: e.clientX - r.left, dy: e.clientY - r.top };
+      moved = false;
+      ball.setPointerCapture(e.pointerId);
+    };
+    ball.onpointermove = (e) => {
+      if (!start) return;
+      if (!moved && Math.hypot(e.clientX - start.x, e.clientY - start.y) < 5) return; // small jitter is still a tap
+      moved = true;
+      nav.classList.remove("open");
+      place(e.clientX - start.dx, e.clientY - start.dy);
+    };
+    ball.onpointerup = () => {
+      if (!start) return;
+      start = null;
+      if (moved) snap();
+      else if (nav.classList.contains("open")) swShow(false), nav.classList.remove("open");
+      else nav.classList.add("open");
+    };
+    for (const id of ["#nav-back", "#nav-home"]) $(id).addEventListener("click", () => nav.classList.remove("open"));
+    addEventListener("pointerdown", (e) => !nav.contains(e.target as Node) && $("#switcher").classList.contains("hidden") && nav.classList.remove("open"));
+  }
   const mem = () => {
     const m = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory; // Chromium/WebView2 only
     return m ? `JS memory ${(m.usedJSHeapSize / 1048576).toFixed(0)} MB` : "";
@@ -2083,24 +2303,46 @@ async function refreshList() {
   renderList();
 }
 
+// icon (Lucide name) + label per server, kept on this computer like the deployment icons
+type ServerLook = { icon?: string; label?: string };
+const getSrvLook = (id: number): ServerLook => {
+  try { return JSON.parse(localStorage[`srvLook:${id}`] ?? "{}"); } catch { return {}; }
+};
+const putSrvLook = (id: number, l: ServerLook) => (localStorage[`srvLook:${id}`] = JSON.stringify(l));
+
 function renderList() {
   const q = $<HTMLInputElement>("#q").value.toLowerCase();
-  const shown = conns.filter((c) => `${c.name} ${c.host} ${c.user}`.toLowerCase().includes(q));
+  const shown = conns.filter((c) => `${c.name} ${c.host} ${c.user} ${getSrvLook(c.id).label ?? ""}`.toLowerCase().includes(q));
   $("#list").innerHTML = shown.length
     ? shown.map((c) => {
         const open = tabs.find((t) => t.conn.id === c.id);
+        const look = getSrvLook(c.id);
         return `
-        <div class="group flex items-center rounded-lg hover:bg-zinc-800">
-          <button data-open="${c.id}" class="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left">
-            ${dot(open?.status)}
-            <span class="min-w-0">
-              <span class="block truncate text-sm">${esc(c.name)}</span>
+        <div class="flex items-center rounded-lg pl-1.5 hover:bg-zinc-800">
+          <button data-sico="${c.id}" title="Choose icon" class="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-zinc-800/70 text-zinc-300 hover:bg-zinc-700 hover:text-amber-400">${lucide(look.icon || "server", "h-4 w-4")}</button>
+          <button data-open="${c.id}" class="flex min-w-0 flex-1 items-center gap-2.5 py-2 pl-2.5 pr-3 text-left">
+            <span class="min-w-0 flex-1">
+              <span class="flex items-center gap-1.5 text-sm"><span class="truncate">${esc(c.name)}</span>${look.label ? `<span class="shrink-0 rounded-full bg-amber-500/15 px-1.5 text-[10px] text-amber-400">${esc(look.label)}</span>` : ""}</span>
               <span class="block truncate font-mono text-[11px] text-zinc-500">${esc(c.user)}@${esc(c.host)}${c.port === 22 ? "" : `:${c.port}`}</span>
             </span>
+            ${dot(open?.status)}
           </button>
         </div>`;
       }).join("")
     : `<p class="px-3 py-6 text-center text-xs text-zinc-600">${conns.length ? "No match" : "No servers yet"}</p>`;
+
+  $("#list").querySelectorAll<HTMLElement>("[data-sico]").forEach((b) => (b.onclick = async () => {
+    const id = +b.dataset.sico!, k = await pickIcon();
+    if (k === null) return;
+    putSrvLook(id, { ...getSrvLook(id), icon: k || undefined });
+    renderList();
+  }));
+  const setLabel = async (c: Conn) => {
+    const ask = inputBox("Server label", c.name, "Save", "file", "e.g. prod, staging");
+    $<HTMLInputElement>("#confirm-input").value = getSrvLook(c.id).label ?? "";
+    const label = await ask;
+    if (label) (putSrvLook(c.id, { ...getSrvLook(c.id), label }), renderList());
+  };
 
   $("#list").querySelectorAll<HTMLElement>("[data-open]").forEach((b) => {
     const c = conns.find((c) => c.id === +b.dataset.open!)!;
@@ -2115,6 +2357,8 @@ function renderList() {
     b.oncontextmenu = (e) => contextMenu(e, [
       [tabs.some((t) => t.conn.id === c.id) ? "New session" : "Connect", "plus", () => openTab(c)],
       ["Edit…", "pencil", () => openForm(c)],
+      ["Set label…", "pencil", () => setLabel(c)],
+      ...(getSrvLook(c.id).label ? [["Remove label", "x", () => (putSrvLook(c.id, { ...getSrvLook(c.id), label: undefined }), renderList())] as MenuItem] : []),
       ["Copy host", "file", () => navigator.clipboard.writeText(`${c.user}@${c.host}${c.port === 22 ? "" : `:${c.port}`}`)],
       ["Delete", "trash", async () => {
         const open = tabs.filter((t) => t.conn.id === c.id);
@@ -3481,7 +3725,7 @@ async function inputBox(title: string, where: string, ok: string, kind: "file" |
   inp.oninput = () => (okBtn.disabled = !inp.value.trim());
   inp.focus();
   // Enter would submit via the first button (Cancel), so close as OK ourselves
-  inp.onkeydown = (e) => e.key === "Enter" && (e.preventDefault(), inp.value.trim() && $<HTMLDialogElement>("#confirm").close("ok"));
+  inp.onkeydown = (e) => void (e.key === "Enter" && (e.preventDefault(), inp.value.trim() && $<HTMLDialogElement>("#confirm").close("ok")));
   return (await done) ? inp.value.trim() : "";
 }
 
@@ -3496,10 +3740,11 @@ function closeTab(key: number) {
   renderList();
 }
 
-/** Bottom-left breadcrumb: which machine / page / path is on screen. */
+/** Bottom-left path (#path): which app / machine / page / file is on screen. app() sets pathOf. */
+let pathOf = () => "/";
 function showWhere() {
-  const el = $("#where");
-  el.textContent = el.title = tabs.find((t) => t.key === activeKey)?.where ?? "/devops";
+  const el = $("#path");
+  el.textContent = el.title = pathOf();
 }
 
 function renderTabs() {

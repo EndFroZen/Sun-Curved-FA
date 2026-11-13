@@ -48,14 +48,14 @@ function build() {
       .join("");
     info.textContent = hits.length > MAX ? `${hits.length} matches, showing ${MAX} - type more to narrow` : `${hits.length} matches`;
   };
-  q.onkeydown = (e) => e.key === "Enter" && grid.querySelector<HTMLElement>("[data-n]")?.click();
+  q.onkeydown = (e) => void (e.key === "Enter" && grid.querySelector<HTMLElement>("[data-n]")?.click());
   grid.onclick = (e) => {
     const b = (e.target as Element).closest<HTMLElement>("[data-n]");
     if (b) finish(b.dataset.n!);
   };
   dlg.querySelector<HTMLElement>("[data-none]")!.onclick = () => finish("");
   dlg.addEventListener("cancel", (e) => (e.preventDefault(), finish(null)));
-  dlg.onclick = (e) => e.target === dlg && finish(null); // click on the backdrop
+  dlg.onclick = (e) => void (e.target === dlg && finish(null)); // click on the backdrop
 }
 
 /** Opens the picker. Resolves to an icon name, "" for "No icon", or null when cancelled. */

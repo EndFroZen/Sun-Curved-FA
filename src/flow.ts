@@ -450,12 +450,12 @@ export function createFlow(box: HTMLElement, log: (text: string, step: boolean) 
       box.querySelectorAll<SVGElement>(".iso-node[data-i]").forEach((g) => {
         const pick = () => ((follow = false), detail(+g.dataset.i!));
         g.onclick = pick;
-        g.onkeydown = (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), pick());
+        g.onkeydown = (e) => void ((e.key === "Enter" || e.key === " ") && (e.preventDefault(), pick()));
       });
       box.querySelectorAll<HTMLElement>("[data-toggle]").forEach((c) => {
         const flip = () => c.setAttribute("aria-expanded", String(c.getAttribute("aria-expanded") !== "true"));
         c.onclick = flip;
-        c.onkeydown = (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), flip());
+        c.onkeydown = (e) => void ((e.key === "Enter" || e.key === " ") && (e.preventDefault(), flip()));
       });
     },
     /** Real deploy printed a `==> title` line. */
