@@ -11,7 +11,7 @@ import { tags as t } from "@lezer/highlight";
 import { suggest } from "./deploy";
 
 // Colours come from CSS variables (styles.css), so day/night switches without rebuilding the editor.
-const highlight = HighlightStyle.define([
+export const highlight = HighlightStyle.define([
   { tag: [t.propertyName, t.definition(t.propertyName)], color: "var(--code-key)" },
   { tag: [t.string, t.special(t.string), t.content], color: "var(--code-str)" },
   { tag: [t.number, t.bool, t.null, t.atom], color: "var(--code-num)" },
@@ -21,7 +21,7 @@ const highlight = HighlightStyle.define([
   { tag: [t.punctuation, t.separator, t.operator, t.bracket, t.brace, t.squareBracket, t.meta], color: "var(--code-punct)" },
 ]);
 
-const theme = EditorView.theme({
+export const theme = EditorView.theme({
   "&": { height: "100%", fontSize: "13px", backgroundColor: "transparent", color: "var(--code-fg)" },
   "&.cm-focused": { outline: "none" },
   ".cm-scroller": { fontFamily: "'Cascadia Mono', Consolas, monospace", lineHeight: "1.65" },

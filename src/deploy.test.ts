@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { compile, dq, parseManifest, parsePm2, scripts, sq, suggest, TEMPLATE, TERMINAL_PATH, yamlPath } from "./deploy.ts";
+import { compile, dq, draftName, parseManifest, parseMounts, parsePm2, scripts, sq, suggest, TEMPLATE, TERMINAL_PATH, yamlPath } from "./deploy.ts";
 
 // --- parsing ---
 const t = parseManifest(TEMPLATE);
@@ -284,4 +284,15 @@ assert.equal(run(scripts.envNames("~/a.env")).stdout.toString(), "GITHUB_TOKEN\n
   assert.equal(at(/^  sudo:/, "  # note "), null);
 }
 
+// draft save: only metadata.name has to be valid
+assert.equal(draftName("metadata:\n  name: my-app\nspec: {}"), "my-app");
+assert.equal(draftName("metadata:\n  name: My_App"), null);
+assert.equal(draftName("metadata:\n\tname: x"), null); // YAML that does not parse
+assert.equal(draftName(""), null);
+
 console.log("deploy.ts ok");
+
+// mounts: "<target index> <relative path>" -> per-target lists; the script itself runs (sees "/" under "/")
+assert.deepEqual(parseMounts("0 public/cache\n1 a\n0 b\n"), [["public/cache", "b"], ["a"]]);
+assert.deepEqual(parseMounts(""), []);
+assert.equal(spawnSync("bash", ["-c", scripts.mounts(["/nonexistent-dir"])]).stdout.toString(), ""); // missing path = no suggestions, no error

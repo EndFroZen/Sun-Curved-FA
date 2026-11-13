@@ -3,14 +3,22 @@ import Database from "@tauri-apps/plugin-sql";
 import { listen } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { compile, LOG_MARK, parseManifest, parsePm2, scripts, TEMPLATE, type Manifest } from "./deploy";
+import { compile, draftName, FOLLOW_LOST, HEARTBEAT, LOG_MARK, parseManifest, parsePm2, parseMounts, QUEUE_SKIPPED, scripts, SHELL_CMD, TEMPLATE, type Manifest } from "./deploy";
 import { createEditor } from "./editor";
 import { createEasy } from "./easy";
 import { createFlow } from "./flow";
 import { marked } from "marked";
+import { safeMd as calMd, toggleTask } from "./notes";
+import { createMdEditor } from "./mdedit";
+import { createSqlEditor } from "./sqledit";
 import manualMd from "./manual.md?raw";
-import { fmtSize, joinPath, listScript, parentOf, parseListing, PREVIEW_BYTES, readScript, writeScript, sudoWriteScript, modeFor, type Entry } from "./files";
+import { fmtSize, joinPath, listScript, parentOf, parseListing, PREVIEW_BYTES, readScript, MEDIA_MAX, mimeFor, mediaScript, writeScript, sudoWriteScript, newFileScript, mkdirScript, modeFor, type Entry } from "./files";
+import { arg, colsSql, connUrl, dbsSql, DEFAULTS, deleteSql, fromUrl, insertSql, isRead, KIND_LABEL, objectsSql, qid, schemaSql, selectSql, statements, toCsv, toUrl, toXlsx, tunnelOf, updateSql, viaLocal, withDb, withPw, type Col, type ConnForm, type Dialect, type Kind } from "./basecurves";
+import { cdLine, CRON_READ, CRON_WRITE, parseCrontab, serializeCrontab, validSched, type CronLine } from "./cron";
 import { parseStats, STATS_SCRIPT, type Cpu, type Stats } from "./stats";
+import { fetch as httpFetch } from "@tauri-apps/plugin-http";
+import { parseHeaders, pretty, withScheme } from "./post";
+import { lucide, pickIcon } from "./iconpick";
 
 type Conn = { id: number; name: string; host: string; port: number; user: string; key_path: string };
 type Status = "connecting" | "live" | "closed";
@@ -134,6 +142,7 @@ const ICONS = {
   none: "", // blank slot keeps menu labels aligned
   refresh: '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>',
   chevronLeft: '<path d="m15 18-6-6 6-6"/>',
+  chevronRight: '<path d="m9 18 6-6-6-6"/>',
   folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
   arrowUp: '<path d="m5 12 7-7 7 7M12 19V5"/>',
   dots: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
@@ -146,8 +155,22 @@ const ICONS = {
   logs: '<path d="M3 5h.01M3 12h.01M3 19h.01M8 5h13M8 12h13M8 19h13"/>',
   terminal: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
   plus: '<path d="M5 12h14M12 5v14"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
   book: '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
   image: '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/>',
+  navBack: '<path d="M15.5 6.2v11.6a1 1 0 0 1-1.6.8L6.8 12.8a1 1 0 0 1 0-1.6l7.1-5.8a1 1 0 0 1 1.6.8z"/>',
+  navHome: '<circle cx="12" cy="12" r="6.8"/>',
+  navApps: '<rect x="5.6" y="5.6" width="12.8" height="12.8" rx="3.2"/>',
+  table: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18M3 15h18M9 9v12"/>',
+  database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>',
+  plug: '<path d="M12 22v-5M9 8V2M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>',
+  play: '<path d="m6 3 14 9-14 9z"/>',
+  playAll: '<path d="m4 4 9 8-9 8z"/><path d="m13 4 9 8-9 8z"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5M12 15V3"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  code: '<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>',
+  grid: '<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>',
+  unplug: '<path d="m19 5 3-3M2 22l3-3"/><path d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z"/><path d="m18 12-6-6 2.3-2.3a2.4 2.4 0 0 1 3.4 0l2.6 2.6a2.4 2.4 0 0 1 0 3.4Z"/>',
   rocket: '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>',
 };
 const icon = (name: keyof typeof ICONS, cls = "h-4 w-4") =>
@@ -255,6 +278,60 @@ const ART = {
       <circle cx="32" cy="31" r="5" fill="none" stroke="#000" stroke-opacity=".4" stroke-width="1"/>
     </g>
     <path d="M8 18a14 14 0 0 1 14-10h20a14 14 0 0 1 14 10Z" fill="#fff" opacity=".07"/>`,
+  clock: `
+    <defs>
+      <linearGradient id="{id}bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1e3a8a"/><stop offset="1" stop-color="#0f172a"/></linearGradient>
+      <linearGradient id="{id}g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fde68a"/><stop offset=".5" stop-color="#f59e0b"/><stop offset="1" stop-color="#b45309"/></linearGradient>
+    </defs>
+    <rect x="4" y="7" width="56" height="54" rx="14" fill="#020617"/>
+    <rect x="4" y="4" width="56" height="54" rx="14" fill="url(#{id}bg)"/>
+    <rect x="4.6" y="4.6" width="54.8" height="52.8" rx="13.4" fill="none" stroke="#fff" stroke-opacity=".25" stroke-width="1.2"/>
+    <g>
+      <animateTransform attributeName="transform" type="rotate" from="0 32 31" to="360 32 31" dur="10s" repeatCount="indefinite"/>
+      <circle cx="32" cy="31" r="17" fill="none" stroke="url(#{id}g)" stroke-width="6" stroke-dasharray="3.4 3.28"/>
+      <circle cx="32" cy="31" r="14.5" fill="url(#{id}g)"/>
+    </g>
+    <circle cx="32" cy="31" r="10.5" fill="#0f172a"/>
+    <g stroke="#fde68a" stroke-width="2.4" stroke-linecap="round"><path d="M32 31v-7"/><path d="M32 31l5 3"/></g>
+    <circle cx="32" cy="31" r="1.8" fill="#fde68a"/>
+    <path d="M8 18a14 14 0 0 1 14-10h20a14 14 0 0 1 14 10Z" fill="#fff" opacity=".07"/>`,
+  post: `
+    <defs>
+      <linearGradient id="{id}bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fb923c"/><stop offset="1" stop-color="#c2410c"/></linearGradient>
+      <radialGradient id="{id}s" cx=".35" cy=".3"><stop offset="0" stop-color="#fef9c3"/><stop offset=".6" stop-color="#fde047"/><stop offset="1" stop-color="#f59e0b"/></radialGradient>
+    </defs>
+    <rect x="4" y="7" width="56" height="54" rx="14" fill="#7c2d12"/>
+    <rect x="4" y="4" width="56" height="54" rx="14" fill="url(#{id}bg)"/>
+    <g stroke="#fef3c7" stroke-width="2.4" stroke-linecap="round" opacity=".85">
+      <animateTransform attributeName="transform" type="rotate" from="0 32 31" to="360 32 31" dur="12s" repeatCount="indefinite"/>
+      <path d="M32 11v5M32 46v5M12 31h5M47 31h5M18 17l3.5 3.5M42.5 41.5 46 45M18 45l3.5-3.5M42.5 20.5 46 17"/>
+    </g>
+    <circle cx="32" cy="31" r="11" fill="url(#{id}s)"/>
+    <path d="M26 31h12m-4-4 4 4-4 4" fill="none" stroke="#9a3412" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M8 18a14 14 0 0 1 14-10h20a14 14 0 0 1 14 10Z" fill="#fff" opacity=".1"/>`,
+  database: `
+    <defs><linearGradient id="{id}s" x1="0" x2="1"><stop offset="0" stop-color="#0e7490"/><stop offset=".4" stop-color="#22d3ee"/><stop offset="1" stop-color="#155e75"/></linearGradient></defs>
+    <rect x="4" y="7" width="56" height="54" rx="14" fill="#020617"/>
+    <rect x="4" y="4" width="56" height="54" rx="14" fill="#0f172a"/>
+    <path d="M16 16v28c0 4 7 7 16 7s16-3 16-7V16Z" fill="url(#{id}s)"/>
+    <g fill="none" stroke="#0f172a" stroke-opacity=".5" stroke-width="1.5"><path d="M16 26c0 4 7 7 16 7s16-3 16-7"/><path d="M16 35c0 4 7 7 16 7s16-3 16-7"/></g>
+    <ellipse cx="32" cy="16" rx="16" ry="6" fill="#a5f3fc"/>
+    <path d="M22 44c4-10 10-2 14-12s6-4 8-6" fill="none" stroke="#fbbf24" stroke-width="2.4" stroke-linecap="round"/>`,
+  notepad: `
+    <defs><linearGradient id="{id}p" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fef9c3"/><stop offset="1" stop-color="#fde68a"/></linearGradient></defs>
+    <rect x="4" y="7" width="56" height="54" rx="14" fill="#a16207"/>
+    <rect x="4" y="4" width="56" height="54" rx="14" fill="url(#{id}p)"/>
+    <path d="M4 16a12 12 0 0 1 12-12h32a12 12 0 0 1 12 12v2H4Z" fill="#facc15"/>
+    <g stroke="#ca8a04" stroke-opacity=".45" stroke-width="1.6" stroke-linecap="round"><path d="M14 28h36M14 36h36M14 44h24"/></g>
+    <g transform="rotate(40 44 40)"><rect x="41" y="22" width="6" height="24" rx="1.5" fill="#f97316"/><path d="M41 46l3 6 3-6Z" fill="#fde68a"/><path d="M43.2 50.4 44 52l.8-1.6Z" fill="#27272a"/><rect x="41" y="20" width="6" height="4" rx="1.5" fill="#f472b6"/></g>`,
+  // ponytail: date baked in at launch; goes stale if the app stays open past midnight.
+  calendar: `
+    <defs><linearGradient id="{id}t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f87171"/><stop offset="1" stop-color="#b91c1c"/></linearGradient></defs>
+    <rect x="4" y="7" width="56" height="54" rx="14" fill="#52525b"/>
+    <rect x="4" y="4" width="56" height="54" rx="14" fill="#fafafa"/>
+    <path d="M4 18a14 14 0 0 1 14-14h28a14 14 0 0 1 14 14v2H4Z" fill="url(#{id}t)"/>
+    <text x="32" y="16" text-anchor="middle" font-size="8" font-weight="700" fill="#fff" font-family="system-ui">${new Date().toLocaleString("en", { weekday: "short" }).toUpperCase()}</text>
+    <text x="32" y="48" text-anchor="middle" font-size="26" font-weight="700" fill="#18181b" font-family="system-ui">${new Date().getDate()}</text>`,
 };
 /** `{c}` in the art is an accent colour (file type band). */
 const appArt = (name: keyof typeof ART, cls = "h-20 w-20 drop-shadow-[0_8px_10px_rgb(0_0_0/0.45)]", c = "#94a3b8") =>
@@ -262,13 +339,28 @@ const appArt = (name: keyof typeof ART, cls = "h-20 w-20 drop-shadow-[0_8px_10px
 
 // App art stays still until hovered: pause each one as it lands in the DOM, play while the pointer is on its button.
 const arts = (n: Node) => (n instanceof Element ? [...(n.matches(".app-art") ? [n] : []), ...n.querySelectorAll(".app-art")] : []) as SVGSVGElement[];
-new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach((n) => arts(n).forEach((s) => s.pauseAnimations()))))
+// `.live` art (app headers) always plays, unless the OS asks for reduced motion.
+const stillMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach((n) => arts(n).forEach((s) => (s.classList.contains("live") && !stillMotion) || s.pauseAnimations()))))
   .observe(document.body, { childList: true, subtree: true });
 const hoverArt = (play: boolean) => (e: MouseEvent) => {
   const b = (e.target as Element).closest("button");
   if (!b || b.contains(e.relatedTarget as Node)) return; // moving between children of the same button
-  arts(b).forEach((s) => (play ? s.unpauseAnimations() : s.pauseAnimations()));
+  arts(b).forEach((s) => s.classList.contains("live") || (play ? s.unpauseAnimations() : s.pauseAnimations()));
 };
+
+/** Amber ring spinner. */
+const spinner = (cls = "h-4 w-4") => `<span class="${cls} inline-block shrink-0 animate-spin rounded-full border-2 border-amber-500/25 border-t-amber-500"></span>`;
+/** Small icon+label toolbar button (BaseCurves view toolbars). */
+const tb = (id: string, ic: keyof typeof ICONS, label: string) =>
+  `<button id="${id}" class="flex items-center gap-1.5 rounded-md px-2 py-1 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 disabled:pointer-events-none disabled:opacity-35">${icon(ic, "h-3.5 w-3.5")}${label}</button>`;
+
+/** App header pieces: back arrow, then the app's art (always moving) with its name and a subtitle. */
+const backBtn = (attrs: string, title: string) =>
+  `<button ${attrs} title="${esc(title)}" aria-label="${esc(title)}" class="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("chevronLeft", "h-5 w-5")}</button>`;
+const appTitle = (art: keyof typeof ART, title: string, sub: string) => `
+  <span class="app-live art-${art}">${appArt(art, "live h-10 w-10 drop-shadow-[0_4px_6px_rgb(0_0_0/0.4)]")}</span>
+  <div class="min-w-0 leading-tight"><p class="font-semibold">${title}</p><p class="truncate text-xs text-zinc-500">${sub}</p></div>`;
 addEventListener("mouseover", hoverArt(true));
 addEventListener("mouseout", hoverArt(false));
 
@@ -313,15 +405,64 @@ function logo(cls: string) {
 const terms = new Set<Terminal>();
 const isLight = () =>
   localStorage.theme ? localStorage.theme === "light" : matchMedia("(prefers-color-scheme: light)").matches;
-const termTheme = () =>
-  isLight()
-    ? { background: "#ffffff", foreground: "#18181b", cursor: "#d97706", selectionBackground: "#f59e0b55" }
-    : { background: "#09090b", foreground: "#e4e4e7", cursor: "#f59e0b", selectionBackground: "#f59e0b55" };
+/** Presets: accent + a hue blended into every zinc surface/border/text shade. */
+type Theme = { accent: string; tint?: string; parts?: { light?: Parts; dark?: Parts } };
+const THEMES: Record<string, Theme> = {
+  Classic: { accent: "#f59e0b" },
+  Ocean: { accent: "#0ea5e9", tint: "#0ea5e9" },
+  Forest: { accent: "#10b981", tint: "#10b981" },
+  Sakura: { accent: "#f43f5e", tint: "#f43f5e" },
+  Grape: { accent: "#8b5cf6", tint: "#8b5cf6" },
+};
+const ZINC_STEPS = [950, 900, 800, 700, 600, 500, 400, 300, 200, 100];
+const ZINC = {
+  dark: ["#09090b", "#18181b", "#27272a", "#3f3f46", "#52525b", "#71717a", "#a1a1aa", "#d4d4d8", "#e4e4e7", "#f4f4f5"],
+  light: ["#ffffff", "#f4f4f5", "#e4e4e7", "#d4d4d8", "#a1a1aa", "#71717a", "#52525b", "#3f3f46", "#27272a", "#18181b"],
+};
+const PARTS = [["accent", "Accent"], ["bg", "Background"], ["panel", "Panel"], ["text", "Text"]] as const;
+type Parts = Partial<Record<(typeof PARTS)[number][0], string>>;
+/** Custom per-part colors, kept separately for day and night. */
+const partsKey = () => `themeParts:${isLight() ? "light" : "dark"}`;
+const parts = (): Parts => {
+  try { return JSON.parse(localStorage[partsKey()] ?? "{}"); } catch { return {}; }
+};
+/** Themes the user saved with "+ New theme". */
+const userThemes = (): Record<string, Theme> => {
+  try { return JSON.parse(localStorage.userThemes ?? "{}"); } catch { return {}; }
+};
+const allThemes = (): Record<string, Theme> => ({ ...THEMES, ...userThemes() });
+const themeName = (): string => (localStorage.themeName in allThemes() ? localStorage.themeName : "Classic");
+const curTheme = () => allThemes()[themeName()];
+const accent = (): string => parts().accent ?? curTheme().accent;
+const baseZinc = () => ZINC[isLight() ? "light" : "dark"];
+const termTheme = () => ({
+  background: parts().bg ?? baseZinc()[0],
+  foreground: parts().text ?? (isLight() ? "#18181b" : "#e4e4e7"),
+  cursor: accent(),
+  selectionBackground: accent() + "55",
+});
+
+/** The UI is written with zinc + amber classes; a theme just repoints those tokens. */
+function applyAccent() {
+  const c = accent(), s = document.documentElement.style, p = parts(), tint = curTheme().tint;
+  const mix = (a: string, b: string, pct: number) => `color-mix(in oklab, ${b} ${pct}%, ${a})`;
+  const z = baseZinc().map((x) => (tint ? mix(x, tint, isLight() ? 6 : 10) : x));
+  if (p.bg) z[0] = p.bg;
+  if (p.panel) z[1] = p.panel;
+  if (p.text) z[9] = p.text;
+  // Borders and muted text sit between panel and text, so they follow custom colors.
+  if (p.panel || p.text) [10, 20, 35, 48, 62, 78, 90].forEach((pct, i) => (z[i + 2] = mix(z[1], z[9], pct)));
+  ZINC_STEPS.forEach((n, i) => s.setProperty(`--color-zinc-${n}`, z[i]));
+  s.setProperty("--color-amber-500", c);
+  s.setProperty("--color-amber-400", `color-mix(in oklab, ${c} 75%, ${isLight() ? "black" : "white"})`);
+  s.setProperty("--code-cursor", c);
+}
 
 /** Applies day/night; `save` remembers the choice, otherwise the OS setting is followed. */
 function setTheme(light: boolean, save = false) {
   if (save) localStorage.theme = light ? "light" : "dark";
   document.documentElement.classList.toggle("light", light);
+  applyAccent();
   terms.forEach((t) => (t.options.theme = termTheme()));
   const b = $("#theme");
   b.innerHTML = icon(light ? "moon" : "sun", "h-[18px] w-[18px]");
@@ -399,12 +540,9 @@ async function app() {
   document.body.innerHTML = `
     <div class="flex h-screen">
       <aside class="flex w-72 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900">
-        <div class="flex items-center gap-3 px-5 py-4">
-          <button id="home" title="Main display" class="rounded-xl">${logo("h-10 w-10")}</button>
-          <div>
-            <p class="font-semibold leading-tight">Sun Curved</p>
-            <p class="text-xs text-zinc-500">SSH workspace</p>
-          </div>
+        <div class="flex items-center gap-3 px-3 py-4">
+          ${backBtn('id="home"', "Main display")}
+          ${appTitle("devops", "DevOps", "SSH workspace")}
           <button id="manual-open" title="Deploy YAML manual" class="ml-auto rounded-lg px-2 py-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("book")}</button>
           <button id="theme" class=" rounded-lg px-2 py-1 text-base hover:bg-zinc-800"></button>
         </div>
@@ -431,8 +569,34 @@ async function app() {
       <div class="tiles mt-8 flex-1">
         ${appTile("devops", "devops", "DevOps")}
         ${appTile("settings", "settings", "Settings")}
+        ${appTile("calendar", "calendar", "Calendar")}
+        ${appTile("basecurves", "database", "BaseCurves")}
+        ${appTile("post", "post", "Sun Post")}
+        ${appTile("notepad", "notepad", "Notepad")}
       </div>
       <div class="mt-auto font-mono text-[11px] text-zinc-500">/</div>
+    </div>
+    <!-- Idle: a small half-circle handle. Hover, keyboard focus, a tap, or an open switcher grows it to full size. -->
+    <nav id="navbar" tabindex="-1" aria-label="Navigation" class="group/nav fixed bottom-0 left-1/2 z-[75] flex h-4 w-20 -translate-x-1/2 items-center justify-around rounded-t-full border border-b-0 border-zinc-700 bg-zinc-900/70 px-7 pt-1.5 text-zinc-300 opacity-60 shadow-[0_-8px_24px_rgb(0_0_0/0.35)] outline-none backdrop-blur-md transition-all duration-200 ease-out
+      before:absolute before:-inset-x-10 before:-top-6 before:bottom-0 before:content-['']
+      hover:h-12 hover:w-56 hover:bg-zinc-900/90 hover:opacity-100 focus-within:h-12 focus-within:w-56 focus-within:opacity-100 [&.open]:h-12 [&.open]:w-56 [&.open]:opacity-100
+      [&>button]:opacity-0 [&>button]:transition-opacity hover:[&>button]:opacity-100 focus-within:[&>button]:opacity-100 [&.open>button]:opacity-100">
+      <button id="nav-back" title="Back" aria-label="Back" class="grid h-9 w-9 place-items-center rounded-full hover:bg-zinc-700 hover:text-zinc-100 active:scale-90">${icon("navBack", "h-5 w-5")}</button>
+      <button id="nav-home" title="Home" aria-label="Home" class="grid h-9 w-9 place-items-center rounded-full hover:bg-zinc-700 hover:text-zinc-100 active:scale-90">${icon("navHome", "h-5 w-5")}</button>
+      <button id="nav-apps" title="Running apps" aria-label="Running apps" class="relative grid h-9 w-9 place-items-center rounded-full hover:bg-zinc-700 hover:text-zinc-100 active:scale-90 [&.on]:text-amber-400">
+        ${icon("navApps", "h-5 w-5")}
+        <span id="sw-n" class="absolute -right-0.5 -top-0.5 hidden min-w-4 rounded-full bg-amber-500 px-1 text-center text-[10px] font-bold leading-4 text-black">0</span>
+      </button>
+    </nav>
+    <div id="switcher" class="fixed inset-0 z-[60] hidden flex-col bg-black/75 p-8 text-zinc-100 backdrop-blur-md">
+      <div class="flex items-center gap-4">
+        <h2 class="text-xl font-semibold">Running apps</h2>
+        <span id="sw-mem" class="rounded-full border border-zinc-700 px-3 py-1 font-mono text-xs text-zinc-400"></span>
+        <button id="sw-clear" class="ml-auto rounded-lg px-4 py-2 text-sm text-red-400 hover:bg-red-500/15 disabled:opacity-30">Clear all</button>
+        <button id="sw-close" title="Close (Esc)" class="rounded-lg p-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("x", "h-5 w-5")}</button>
+      </div>
+      <p class="mt-1 text-sm text-zinc-500">Swipe a card up (or press ✕) to close the app and free its memory, connections and SSH sessions. Click a card to open it.</p>
+      <div id="sw-cards" class="flex flex-1 touch-none items-center gap-8 overflow-x-auto px-4"></div>
     </div>
     <dialog id="dlg" class="fixed inset-0 m-auto h-fit w-[28rem] rounded-2xl border border-zinc-800 bg-zinc-900 p-0 text-zinc-100 backdrop:bg-black/70">
       <form id="f" class="space-y-3 p-6">
@@ -472,29 +636,72 @@ async function app() {
       </form>
     </dialog>
     <dialog id="confirm" class="fixed inset-0 m-auto h-fit w-96 rounded-2xl border border-zinc-800 bg-zinc-900 p-0 text-zinc-100 backdrop:bg-black/70">
-      <form method="dialog" class="space-y-3 p-6">
+      <form method="dialog" class="space-y-3 p-6 [&>[data-inonly]+*]:!mt-1">
         <div class="flex items-center gap-3">
-          <div class="grid h-9 w-9 place-items-center rounded-xl bg-amber-500/15 text-amber-400">${icon("x", "h-[18px] w-[18px]")}</div>
+          <div id="confirm-icon" class="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-amber-500/15 text-amber-400"></div>
           <h2 id="confirm-title" class="min-w-0 truncate font-semibold"></h2>
         </div>
+        <p class="hidden text-[11px] font-medium uppercase tracking-wider text-zinc-500" data-inonly>Location</p>
         <p id="confirm-text" class="text-sm text-zinc-400"></p>
+        <label for="confirm-input" class="hidden text-[11px] font-medium uppercase tracking-wider text-zinc-500" data-inonly>Name</label>
+        <input id="confirm-input" spellcheck="false" autocomplete="off" class="hidden w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm outline-none placeholder:text-zinc-600 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20" />
         <div class="flex justify-end gap-2 pt-2">
           <button value="" class="rounded-lg px-4 py-2 text-sm text-zinc-400 outline-none hover:bg-zinc-800 focus-visible:ring-2 focus-visible:ring-amber-500/50">Cancel</button>
-          <button value="ok" id="confirm-ok" class="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-black outline-none hover:bg-amber-400 focus-visible:ring-2 focus-visible:ring-amber-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900"></button>
+          <button value="ok" id="confirm-ok" class="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-black outline-none hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-amber-500 focus-visible:ring-2 focus-visible:ring-amber-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900"></button>
         </div>
       </form>
     </dialog>
-    <dialog id="settings" class="fixed inset-0 m-auto h-fit w-[30rem] max-w-[92vw] rounded-2xl border border-zinc-800 bg-zinc-900 p-0 text-zinc-100 backdrop:bg-black/70">
-      <div class="space-y-5 p-6">
-        <div class="flex items-center gap-3">
-          <h2 class="text-lg font-semibold">Settings</h2>
-          <button id="set-close" class="ml-auto rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("x")}</button>
+    <div id="settings" class="fixed inset-0 z-50 hidden flex-col bg-zinc-950 p-8 text-zinc-100">
+      <div class="flex items-center gap-1">
+        ${backBtn('id="set-close"', "Main display")}
+        ${appTitle("settings", "Settings", "Preferences")}
+      </div>
+      <div class="mt-6 flex min-h-0 flex-1 gap-6">
+      <nav class="w-56 shrink-0 space-y-1">
+        <button aria-current="page" class="flex w-full items-center gap-2 rounded-lg bg-zinc-800 px-3 py-2 text-left text-sm font-medium text-zinc-100">${icon("image")} Personalize</button>
+      </nav>
+      <section class="min-w-0 flex-1">
+      <h2 class="mb-4 text-xl font-semibold">Personalize</h2>
+      <div id="set-preview" aria-hidden="true" class="relative mb-5 aspect-video w-full max-w-md overflow-hidden rounded-xl border-4 border-zinc-800 bg-zinc-950 bg-cover bg-center shadow-xl">
+        <div class="absolute left-[12%] top-[12%] w-[60%] overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 shadow-lg">
+          <div class="flex items-center gap-1 border-b border-zinc-800 px-2 py-1.5">
+            <span class="h-1.5 w-1.5 rounded-full bg-zinc-600"></span><span class="h-1.5 w-1.5 rounded-full bg-zinc-600"></span><span class="h-1.5 w-1.5 rounded-full bg-zinc-600"></span>
+            <span class="ml-2 h-1.5 w-12 rounded bg-zinc-700"></span>
+          </div>
+          <div class="space-y-1.5 p-2.5">
+            <div class="h-1.5 w-3/4 rounded bg-zinc-700"></div>
+            <div class="h-1.5 w-1/2 rounded bg-zinc-800"></div>
+            <div class="h-1.5 w-2/3 rounded bg-zinc-800"></div>
+            <div class="flex justify-end gap-1.5 pt-1.5">
+              <span class="h-3.5 w-9 rounded bg-zinc-800"></span>
+              <span class="h-3.5 w-9 rounded bg-amber-500"></span>
+            </div>
+          </div>
         </div>
+        <div class="absolute inset-x-0 bottom-0 flex h-[11%] items-center justify-center gap-1.5 bg-zinc-900/90">
+          <span class="h-2.5 w-2.5 rounded bg-amber-500"></span><span class="h-2.5 w-2.5 rounded bg-zinc-600"></span><span class="h-2.5 w-2.5 rounded bg-zinc-600"></span>
+        </div>
+      </div>
+      <div class="w-full max-w-2xl space-y-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
         <div class="flex items-center justify-between gap-4">
           <span class="text-sm">Theme</span>
           <div class="flex gap-1 rounded-lg border border-zinc-800 p-1 text-sm">
             <button data-theme-set="light" class="flex items-center gap-1.5 rounded-md px-3 py-1">${icon("sun")} Light</button>
             <button data-theme-set="dark" class="flex items-center gap-1.5 rounded-md px-3 py-1">${icon("moon")} Dark</button>
+          </div>
+        </div>
+        <div>
+          <span class="text-sm">Theme</span>
+          <div id="set-themes" class="mt-2 grid grid-cols-5 gap-2"></div>
+        </div>
+        <div id="set-parts">
+          <div class="flex items-center justify-between">
+            <span class="text-sm">Custom colors <span id="set-parts-for" class="text-xs text-zinc-500"></span></span>
+            <button id="set-parts-x" class="rounded-lg px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">Reset</button>
+          </div>
+          <div class="mt-2 grid grid-cols-4 gap-2">
+            ${PARTS.map(([k, l]) => `<label class="flex cursor-pointer flex-col items-center gap-1 rounded-lg border border-zinc-800 p-2 text-xs text-zinc-400 hover:bg-zinc-800">
+              <input data-part="${k}" type="color" class="h-8 w-full cursor-pointer rounded border-0 bg-transparent p-0" />${l}</label>`).join("")}
           </div>
         </div>
         <div class="flex items-center justify-between gap-4">
@@ -505,7 +712,244 @@ async function app() {
           </div>
         </div>
       </div>
+      </section>
+      </div>
+    </div>
+    <dialog id="theme-dlg" class="fixed inset-0 m-auto h-fit w-96 max-w-[92vw] rounded-2xl border border-zinc-800 bg-zinc-900 p-0 text-zinc-100 backdrop:bg-black/70">
+      <form id="theme-form" class="space-y-3 p-6">
+        <h2 id="theme-dlg-title" class="text-lg font-semibold">New theme</h2>
+        <p id="theme-dlg-sub" class="text-sm text-zinc-400"></p>
+        <input id="theme-name" required maxlength="24" placeholder="My theme" class="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none placeholder:text-zinc-600 focus:border-amber-500" />
+        <div class="flex justify-end gap-2 pt-2">
+          <button type="button" id="theme-cancel" class="rounded-lg px-4 py-2 text-sm text-zinc-400 hover:bg-zinc-800">Cancel</button>
+          <button class="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-black hover:bg-amber-400">Save</button>
+        </div>
+      </form>
     </dialog>
+    <div id="bc" class="fixed inset-0 z-50 hidden flex-col bg-zinc-950 text-zinc-100">
+      <header class="flex shrink-0 items-center gap-3 border-b border-zinc-800 bg-zinc-900 px-4 py-2">
+        ${backBtn('id="bc-close"', "Main display")}
+        ${appTitle("database", "BaseCurves", "SQLite · PostgreSQL · MySQL")}
+        <div class="mx-3 h-10 w-px bg-zinc-800"></div>
+        <nav class="flex items-stretch gap-1">
+          ${[
+            ["bc-new", "plug", "Connection", "New connection", "text-sky-400"],
+            ["bc-newq", "code", "New Query", "New query tab", "text-amber-400"],
+            ["bc-v-objects", "table", "Table", "Tables of the current database", "text-emerald-400"],
+            ["bc-v-query", "play", "Query", "SQL editor", "text-violet-400"],
+            ["bc-refresh", "refresh", "Refresh", "Reload tables and data", "text-zinc-300"],
+            ["bc-disconnect", "unplug", "Disconnect", "Close the current connection", "text-rose-400"],
+          ].map(([id, ic, label, title, color]) => `<button id="${id}" title="${title}" class="group flex w-[4.5rem] flex-col items-center gap-1 rounded-lg px-1 py-1.5 text-[11px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 disabled:pointer-events-none disabled:opacity-35 [&.on]:bg-zinc-800 [&.on]:text-zinc-100">
+              <span class="${color} transition-transform group-hover:-translate-y-0.5">${icon(ic as keyof typeof ICONS, "h-6 w-6")}</span>${label}</button>`).join("")}
+        </nav>
+        <div id="bc-badge" class="ml-auto flex items-center gap-2 rounded-full border border-zinc-800 px-3 py-1 text-xs text-zinc-500">${icon("unplug", "h-3.5 w-3.5")} Not connected</div>
+      </header>
+      <div class="flex min-h-0 flex-1">
+        <aside class="flex w-64 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900/60">
+          <div class="flex items-center gap-2 px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+            ${icon("plug", "h-3.5 w-3.5")} My Connections
+            <button id="bc-new2" title="New connection" class="ml-auto rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-amber-400">${icon("plus", "h-3.5 w-3.5")}</button>
+          </div>
+          <div class="px-2 pb-2">
+            <label class="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1 text-zinc-500 focus-within:border-amber-500">${icon("search", "h-3.5 w-3.5")}
+              <input id="bc-tree-q" placeholder="Filter tables…" class="w-full bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-600" /></label>
+          </div>
+          <nav id="bc-tree" class="min-h-0 flex-1 overflow-auto px-1.5 pb-3 text-sm"></nav>
+        </aside>
+        <main class="flex min-w-0 flex-1 flex-col">
+          <div id="bc-views" class="flex shrink-0 items-end gap-0.5 border-b border-zinc-800 bg-zinc-900/60 px-2 pt-1.5 text-sm">
+            ${[["objects", "grid", "Objects"], ["data", "table", ""], ["query", "code", "Query"]].map(([v, ic, label]) =>
+              `<button data-v="${v}" class="flex max-w-56 items-center gap-1.5 truncate rounded-t-lg border border-b-0 border-transparent px-3 py-1.5 text-zinc-400 hover:text-zinc-100 [&.on]:border-zinc-800 [&.on]:bg-zinc-950 [&.on]:text-zinc-100 ${v === "data" ? "hidden" : ""}">${icon(ic as keyof typeof ICONS, "h-3.5 w-3.5")}<span class="truncate">${label}</span>${v === "data" ? `<span data-close title="Close" class="-mr-1 rounded p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100">${icon("x", "h-3 w-3")}</span>` : ""}</button>`).join("")}
+          </div>
+
+          <section data-view="objects" class="flex min-h-0 flex-1 flex-col">
+            <div class="flex shrink-0 items-center gap-1 border-b border-zinc-800 px-2 py-1 text-xs">
+              ${tb("bc-o-open", "table", "Open Table")}${tb("bc-o-new", "plus", "New Table")}${tb("bc-o-drop", "trash", "Delete Table")}${tb("bc-o-csv", "download", "Export Wizard")}
+              <label class="ml-auto flex items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900 px-2 py-0.5 text-zinc-500 focus-within:border-amber-500">${icon("search", "h-3.5 w-3.5")}
+                <input id="bc-o-q" placeholder="Search" class="w-40 bg-transparent text-zinc-100 outline-none" /></label>
+            </div>
+            <div id="bc-objects" class="min-h-0 flex-1 overflow-auto"></div>
+          </section>
+
+          <section data-view="data" class="hidden min-h-0 flex-1 flex-col">
+            <div class="flex shrink-0 items-center gap-1 border-b border-zinc-800 px-2 py-1 text-xs">
+              ${tb("bc-add", "plus", "Add Row")}${tb("bc-d-refresh", "refresh", "Refresh")}${tb("bc-d-csv", "download", "Export")}
+              <span class="ml-2 text-zinc-500">Edit a cell and press Enter to save · right-click a row for more</span>
+            </div>
+            <div id="bc-grid" class="min-h-0 flex-1 overflow-auto"></div>
+          </section>
+
+          <section data-view="query" class="hidden min-h-0 flex-1 flex-col">
+            <div class="flex shrink-0 items-end gap-1 border-b border-zinc-800 px-2 pt-1 text-xs">
+              <div id="bc-qtabs" class="flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto"></div>
+              <div class="flex items-center gap-1 pb-1">
+                <button id="bc-run" title="Run statement at cursor (Ctrl+Enter)" class="flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1 font-medium text-white hover:bg-emerald-500">${icon("play", "h-3.5 w-3.5")} Run</button>
+                <button id="bc-runall" title="Run the whole tab (Ctrl+Shift+Enter)" class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-zinc-300 hover:bg-zinc-800">${icon("playAll", "h-3.5 w-3.5")} Run all</button>
+              </div>
+            </div>
+            <div id="bc-editor" class="h-64 shrink-0 overflow-hidden"></div>
+            <div id="bc-split" title="Drag to resize" class="h-1.5 shrink-0 cursor-row-resize border-y border-zinc-800 bg-zinc-900 hover:bg-amber-500/40"></div>
+            <div class="flex shrink-0 items-center border-b border-zinc-800 px-2 py-0.5 text-xs"><span class="text-zinc-500">Results</span><span class="ml-auto">${tb("bc-q-csv", "download", "Export results")}</span></div>
+            <div id="bc-qgrid" class="min-h-0 flex-1 overflow-auto"><p class="py-10 text-center text-sm text-zinc-600">Ctrl+Enter runs the statement under the cursor · Ctrl+Space suggests tables and columns</p></div>
+          </section>
+
+          <footer class="flex shrink-0 items-center gap-3 border-t border-zinc-800 bg-zinc-900 px-3 py-1 font-mono text-[11px] text-zinc-500">
+            <span id="bc-spin" class="hidden">${spinner("h-3 w-3")}</span><span id="bc-msg" class="min-w-0 flex-1 truncate"></span>
+            <span id="bc-where" class="truncate"></span>
+          </footer>
+        </main>
+      </div>
+      <dialog id="bc-dlg" class="fixed inset-0 m-auto h-fit w-[36rem] max-w-[94vw] rounded-2xl border border-zinc-800 bg-zinc-900 p-0 text-zinc-100 backdrop:bg-black/70">
+        <form id="bc-form" class="p-6">
+          <h2 id="bc-dlg-title" class="text-lg font-semibold">New Connection</h2>
+          <input type="hidden" name="id" />
+          <input type="hidden" name="kind" />
+          <div id="bc-kinds" class="mt-4 grid grid-cols-4 gap-2">
+            ${(["postgres", "mysql", "mariadb", "sqlite"] as const).map((k) => `<button type="button" data-kind="${k}" class="rounded-xl border border-zinc-800 px-2 py-2.5 text-sm hover:bg-zinc-800 [&.on]:border-amber-500 [&.on]:bg-amber-500/10 [&.on]:text-amber-400">${KIND_LABEL[k]}</button>`).join("")}
+          </div>
+          <div id="bc-tabs" data-kinds="net" class="mt-4 flex gap-1 border-b border-zinc-800 text-sm">
+            ${["General", "SSH"].map((t) => `<button type="button" data-tab="${t}" class="-mb-px border-b-2 border-transparent px-4 py-1.5 text-zinc-400 hover:text-zinc-100 [&.on]:border-amber-500 [&.on]:text-zinc-100">${t}</button>`).join("")}
+          </div>
+          <div data-pane="SSH" class="hidden">
+            <div class="my-5 flex items-center justify-center gap-3 text-xs text-zinc-400">
+              <span class="flex flex-col items-center gap-1">${logo("h-9 w-9")}Sun Curved</span>
+              <span class="h-px w-14 bg-zinc-700"></span>
+              <span class="flex flex-col items-center gap-1">${appArt("terminal", "h-9 w-9")}SSH Server</span>
+              <span class="h-px w-14 bg-zinc-700"></span>
+              <span class="flex flex-col items-center gap-1">${appArt("database", "h-9 w-9")}Database</span>
+            </div>
+            <div class="grid grid-cols-[9rem_1fr] items-center gap-x-4 gap-y-2.5 text-sm">
+              <span></span>
+              <label class="flex items-center gap-2 text-zinc-400"><input id="bc-ssh-on" type="checkbox" class="accent-amber-500" /> Use SSH Tunnel</label>
+              <label for="bc-ssh" class="text-zinc-400">SSH Server:</label>
+              <select id="bc-ssh" name="ssh" class="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-zinc-100 outline-none focus:border-amber-500 disabled:opacity-40"></select>
+              <span></span>
+              <p class="text-xs text-zinc-500">Uses the host, user, key and saved password of a server from the DevOps app (add one there with + New). Host/Port on the General tab are then as seen from that SSH server, e.g. <span class="font-mono">localhost</span>.</p>
+            </div>
+          </div>
+          <div data-pane="General">
+          <div class="my-5 flex items-center justify-center gap-4 text-xs text-zinc-400">
+            <span class="flex flex-col items-center gap-1">${logo("h-9 w-9")}Sun Curved</span>
+            <span class="h-px w-24 bg-zinc-700"></span>
+            <span class="flex flex-col items-center gap-1">${appArt("database", "h-9 w-9")}Database</span>
+          </div>
+          <div class="grid grid-cols-[9rem_1fr] items-center gap-x-4 gap-y-2.5 text-sm">
+            ${[
+              ["name", "Connection Name", "", "all", ""],
+              ["host", "Host", "localhost", "net", ""],
+              ["port", "Port", "", "net", 'type="number" min="1" max="65535" class="!w-28"'],
+              ["database", "Initial Database", "optional", "net", ""],
+              ["user", "User Name", "", "net", ""],
+              ["file", "Database File", "C:\path\data.db (relative = app data folder)", "sqlite", ""],
+            ].map(([n, l, ph, kinds, attrs]) => `<label for="bc-f-${n}" data-kinds="${kinds}" class="text-zinc-400">${l}:</label>
+              <input id="bc-f-${n}" name="${n}" data-kinds="${kinds}" placeholder="${esc(ph)}" ${n === "database" ? "" : "required"} spellcheck="false" ${attrs.replace(/class="[^"]*"/, "")}
+                class="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-amber-500 ${/class="([^"]*)"/.exec(attrs)?.[1] ?? ""}" />`).join("")}
+            <label for="bc-f-secret" data-kinds="net" class="text-zinc-400">Password:</label>
+            <input id="bc-f-secret" name="secret" data-kinds="net" type="password" autocomplete="off" class="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-zinc-100 outline-none focus:border-amber-500" />
+            <span data-kinds="net"></span>
+            <label data-kinds="net" class="flex items-center gap-2 text-zinc-400"><input type="checkbox" name="savepw" checked class="accent-amber-500" /> Save password</label>
+          </div>
+          </div>
+          <p id="bc-test-msg" class="mt-4 min-h-4 font-mono text-xs text-zinc-500"></p>
+          <div class="mt-2 flex items-center gap-2">
+            <button type="button" id="bc-test" class="mr-auto rounded-lg border border-zinc-700 px-4 py-2 text-sm hover:bg-zinc-800">Test Connection</button>
+            <button type="button" id="bc-cancel" class="rounded-lg px-4 py-2 text-sm text-zinc-400 hover:bg-zinc-800">Cancel</button>
+            <button class="rounded-lg bg-amber-500 px-5 py-2 text-sm font-medium text-black hover:bg-amber-400">OK</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="bc-pw" class="fixed inset-0 m-auto h-fit w-80 rounded-2xl border border-zinc-800 bg-zinc-900 p-0 text-zinc-100 backdrop:bg-black/70">
+        <form method="dialog" class="space-y-3 p-6">
+          <h2 id="bc-pw-title" class="font-semibold"></h2>
+          <input id="bc-pw-in" type="password" autocomplete="off" placeholder="Password" class="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-amber-500" />
+          <div class="flex justify-end gap-2">
+            <button value="" formnovalidate class="rounded-lg px-4 py-2 text-sm text-zinc-400 hover:bg-zinc-800">Cancel</button>
+            <button value="ok" class="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-black hover:bg-amber-400">Connect</button>
+          </div>
+        </form>
+      </dialog>
+    </div>
+    <div id="cal" class="fixed inset-0 z-50 hidden flex-col bg-zinc-950 p-8 text-zinc-100">
+      <div class="flex items-center gap-1">
+        ${backBtn('id="cal-close"', "Main display")}
+        ${appTitle("calendar", "Calendar", "Notes by day")}
+        <h2 id="cal-title" class="ml-8 mr-auto text-2xl font-semibold"></h2>
+        <button id="cal-prev" class="rounded-lg p-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("chevronLeft", "h-5 w-5")}</button>
+        <button id="cal-today" class="rounded-lg px-3 py-1.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">Today</button>
+        <button id="cal-next" class="rounded-lg p-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("chevronRight", "h-5 w-5")}</button>
+      </div>
+      <div class="mt-6 grid min-h-0 flex-1 grid-cols-[3fr_2fr] gap-6">
+        <div id="cal-grid" class="grid grid-cols-7 gap-2 [grid-template-rows:auto_repeat(6,1fr)] text-lg"></div>
+        <aside class="flex min-h-0 flex-col rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
+          <p id="cal-dow" class="text-sm text-zinc-400"></p>
+          <h3 id="cal-day" class="text-2xl font-semibold"></h3>
+          <ul id="cal-list" class="mt-4 min-h-0 flex-1 space-y-1 overflow-auto border-t border-zinc-800 pt-4"></ul>
+          <button id="cal-add" title="Add item" aria-label="Add item" class="mt-4 ml-auto grid h-11 w-11 place-items-center rounded-full bg-amber-500 text-2xl font-bold text-black shadow-lg hover:bg-amber-400">+</button>
+        </aside>
+      </div>
+      <dialog id="cal-dlg" class="fixed inset-0 m-auto h-[85vh] w-[85vw] max-h-none max-w-none rounded-2xl border border-zinc-800 bg-zinc-900 p-0 text-zinc-100 backdrop:bg-black/70">
+        <form id="cal-form" class="flex h-full flex-col gap-3 p-6">
+          <div class="flex items-end gap-4">
+            <div class="mr-auto">
+              <h2 id="cal-dlg-title" class="text-lg font-semibold">New item</h2>
+              <p id="cal-dlg-day" class="text-sm text-zinc-400"></p>
+            </div>
+            <label class="text-xs text-zinc-400">Time (optional)
+              <input name="t" type="time" class="mt-1 block rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500" />
+            </label>
+          </div>
+          <div id="cal-editor" class="min-h-0 flex-1 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 px-3 focus-within:border-amber-500"></div>
+          <div class="flex items-center justify-end gap-2 pt-1">
+            <span class="mr-auto text-xs text-zinc-500">Markdown · Ctrl+Enter to save</span>
+            <button type="button" id="cal-cancel" class="rounded-lg px-4 py-2 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">Cancel</button>
+            <button class="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-black hover:bg-amber-400">Save</button>
+          </div>
+        </form>
+      </dialog>
+    </div>
+    <div id="post" class="fixed inset-0 z-50 hidden flex-col bg-zinc-950 p-8 text-zinc-100">
+      <div class="flex items-center gap-1">
+        ${backBtn('id="post-close"', "Main display")}
+        ${appTitle("post", "Sun Post", "HTTP requests")}
+      </div>
+      <div class="mt-6 grid min-h-0 flex-1 grid-cols-[14rem_1fr] gap-6">
+        <aside class="flex min-h-0 flex-col rounded-2xl border border-zinc-800 bg-zinc-900 p-3">
+          <div class="flex items-center justify-between px-2 pb-2 text-[11px] font-medium uppercase tracking-wider text-zinc-500">History
+            <button id="post-clear" class="rounded-md px-2 py-0.5 normal-case tracking-normal text-zinc-400 hover:bg-zinc-800">Clear</button></div>
+          <ul id="post-hist" class="min-h-0 flex-1 space-y-0.5 overflow-auto"></ul>
+        </aside>
+        <form id="post-form" class="flex min-h-0 flex-col gap-3">
+          <div class="flex gap-2">
+            <select name="m" class="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm font-semibold text-amber-400 outline-none focus:border-amber-500">${["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((m) => `<option>${m}</option>`).join("")}</select>
+            <input name="u" required placeholder="https://api.example.com/users" class="min-w-0 flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm outline-none placeholder:text-zinc-600 focus:border-amber-500" />
+            <button id="post-send" class="rounded-lg bg-amber-500 px-5 py-2 text-sm font-semibold text-black hover:bg-amber-400 disabled:opacity-40">Send</button>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <label class="text-xs text-zinc-400">Headers <span class="text-zinc-600">(Key: Value per line)</span>
+              <textarea name="h" rows="5" spellcheck="false" placeholder="Content-Type: application/json&#10;Authorization: Bearer ..." class="mt-1 block w-full resize-none rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-amber-500"></textarea></label>
+            <label class="text-xs text-zinc-400">Body
+              <textarea name="b" rows="5" spellcheck="false" placeholder='{"name": "sun"}' class="mt-1 block w-full resize-none rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-amber-500"></textarea></label>
+          </div>
+          <div class="flex min-h-0 flex-1 flex-col rounded-2xl border border-zinc-800 bg-zinc-900">
+            <div class="flex items-center gap-4 border-b border-zinc-800 px-4 py-2 text-sm">
+              <span class="font-semibold">Response</span><span id="post-meta" class="font-mono text-xs text-zinc-400"></span>
+              <button type="button" id="post-tab" class="ml-auto rounded-md px-2 py-0.5 text-xs text-zinc-400 hover:bg-zinc-800">Headers</button>
+            </div>
+            <pre id="post-out" class="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all p-4 font-mono text-sm"></pre>
+          </div>
+        </form>
+      </div>
+    </div>
+    <div id="notepad" class="fixed inset-0 z-50 hidden flex-col bg-zinc-950 p-8 text-zinc-100">
+      <div class="flex items-center gap-1">
+        ${backBtn('id="np-close"', "Main display")}
+        ${appTitle("notepad", "Notepad", "Plain text, saved automatically")}
+        <span id="np-info" class="ml-auto font-mono text-xs text-zinc-500"></span>
+        <button id="np-new" title="New note" class="ml-3 flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-sm font-semibold text-black hover:bg-amber-400">${icon("plus")} New</button>
+      </div>
+      <div id="np-list" class="mt-6 min-h-0 flex-1 space-y-1 overflow-auto rounded-2xl border border-zinc-800 bg-zinc-900 p-2"></div>
+      <textarea id="np-text" spellcheck="false" placeholder="Type anything…" class="mt-6 hidden min-h-0 flex-1 resize-none rounded-2xl border border-zinc-800 bg-zinc-900 p-5 font-mono text-sm leading-relaxed text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-amber-500"></textarea>
+    </div>
     <dialog id="manual"class="fixed inset-0 m-auto h-[90vh] w-[60rem] max-w-[94vw] rounded-2xl border border-zinc-800 bg-zinc-900 p-0 text-zinc-100 backdrop:bg-black/70">
       <div class="flex h-full flex-col">
         <div class="flex items-center gap-3 border-b border-zinc-800 px-5 py-3">
@@ -529,11 +973,11 @@ async function app() {
         <div id="pick-list" class="min-h-0 flex-1 overflow-auto p-2"></div>
         <div class="flex justify-end gap-2 border-t border-zinc-800 px-5 py-3">
           <button type="button" id="pick-cancel" class="rounded-lg px-4 py-2 text-sm text-zinc-400 hover:bg-zinc-800">Cancel</button>
-          <button type="button" id="pick-ok" class="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-black hover:bg-amber-400">เลือกโฟลเดอร์นี้</button>
+          <button type="button" id="pick-ok" class="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-black hover:bg-amber-400">Choose this folder</button>
         </div>
       </div>
     </dialog>
-    <div id="ctx" class="fixed z-50 hidden min-w-48 rounded-xl border border-zinc-700 bg-zinc-900/95 p-1 text-sm text-zinc-100 shadow-2xl shadow-black/50 backdrop-blur"></div>
+    <div id="ctx" class="fixed z-[80] hidden min-w-48 rounded-xl border border-zinc-700 bg-zinc-900/95 p-1 text-sm text-zinc-100 shadow-2xl shadow-black/50 backdrop-blur"></div>
     <dialog id="auth" class="fixed inset-0 m-auto h-fit w-96 rounded-2xl border border-zinc-800 bg-zinc-900 p-0 text-zinc-100 backdrop:bg-black/70">
       <form id="auth-form" class="space-y-3 p-6">
         <div class="mb-1 flex items-center gap-3">
@@ -574,25 +1018,1022 @@ async function app() {
   $("#manual-close").onclick = () => $<HTMLDialogElement>("#manual").close();
   $("#theme").onclick = () => setTheme(!isLight(), true);
   // Main display: a launcher over everything; the existing workspace is its DevOps app.
-  $("#home").onclick = () => $("#launcher").classList.replace("hidden", "flex");
+  $("#home").onclick = () => ($("#launcher").classList.replace("hidden", "flex"), swMark());
   $("[data-devops]").onclick = () => $("#launcher").classList.replace("flex", "hidden");
   const mainWall = wallpaper($("#launcher"), 0);
   setTheme(isLight());
 
   // Settings app.
-  const setDlg = $<HTMLDialogElement>("#settings");
-  const markTheme = () =>
+  const setDlg = $("#settings");
+  const markTheme = () => {
     setDlg.querySelectorAll<HTMLElement>("[data-theme-set]").forEach((b) => {
       const on = (b.dataset.themeSet === "light") === isLight();
       b.classList.toggle("bg-amber-500", on);
       b.classList.toggle("text-black", on);
     });
+    setDlg.querySelectorAll<HTMLElement>("[data-theme-name]").forEach((b) => b.classList.toggle("ring-2", b.dataset.themeName === themeName()));
+    const p = parts(), z = baseZinc();
+    const shown = { accent: accent(), bg: p.bg ?? z[0], panel: p.panel ?? z[1], text: p.text ?? z[9] };
+    setDlg.querySelectorAll<HTMLInputElement>("[data-part]").forEach((i) => (i.value = shown[i.dataset.part as keyof typeof shown]));
+    $("#set-preview").style.backgroundImage = $("#launcher").style.backgroundImage;
+    const mode = isLight() ? "Light" : "Dark";
+    $("#set-parts-for").textContent = themeName() in THEMES ? `(${mode} mode)` : `editing "${themeName()}" · ${mode} mode, saved automatically`;
+  };
+  const retheme = () => (setTheme(isLight()), markTheme());
+  const pickTheme = (n: string) => {
+    localStorage.themeName = n;
+    const t = allThemes()[n];
+    for (const m of ["light", "dark"] as const) {
+      if (t?.parts?.[m]) localStorage[`themeParts:${m}`] = JSON.stringify(t.parts[m]);
+      else localStorage.removeItem(`themeParts:${m}`);
+    }
+    retheme();
+  };
+  const drawThemes = () => {
+    const box = $("#set-themes"), m = isLight() ? "light" : "dark";
+    box.innerHTML = Object.entries(allThemes()).map(([n, t]) => {
+      const p = t.parts?.[m] ?? {};
+      const bg = p.panel ?? (t.tint ? `color-mix(in oklab, ${t.tint} 18%, #18181b)` : "#18181b");
+      return `<button data-theme-name="${esc(n)}" class="flex min-w-0 flex-col items-center gap-1.5 rounded-xl border border-zinc-800 p-2 text-xs ring-amber-500 hover:bg-zinc-800">
+        <span class="relative h-10 w-full rounded-md border border-zinc-700" style="background:${bg}">
+          <span class="absolute bottom-1 right-1 h-3 w-3 rounded-full" style="background:${p.accent ?? t.accent}"></span>
+        </span><span class="w-full truncate text-center">${esc(n)}</span></button>`;
+    }).join("") + `<button id="set-theme-new" class="flex flex-col items-center gap-1.5 rounded-xl border border-dashed border-zinc-700 p-2 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">
+        <span class="grid h-10 w-full place-items-center">${icon("plus", "h-5 w-5")}</span>New theme</button>`;
+    box.querySelectorAll<HTMLElement>("[data-theme-name]").forEach((b) => {
+      const n = b.dataset.themeName!;
+      b.onclick = () => pickTheme(n);
+      if (!(n in THEMES)) b.oncontextmenu = (e) => contextMenu(e, [["Edit colors", "pencil", () => {
+        pickTheme(n);
+        $("#set-parts").scrollIntoView({ behavior: "smooth" });
+      }], ["Rename", "pencil", () => openThemeDlg(n)], ["Delete theme", "trash", async () => {
+        if (!(await confirmBox(`Delete "${n}"?`, "This saved theme will be removed.", "Delete"))) return;
+        const u = userThemes();
+        delete u[n];
+        localStorage.userThemes = JSON.stringify(u);
+        if (themeName() === n || !(themeName() in allThemes())) pickTheme("Classic");
+        drawThemes();
+      }]]);
+    });
+    $("#set-theme-new").onclick = () => openThemeDlg();
+    markTheme();
+  };
+  let renaming: string | undefined;
+  const openThemeDlg = (old?: string) => {
+    renaming = old;
+    $<HTMLFormElement>("#theme-form").reset();
+    $("#theme-dlg-title").textContent = old ? "Rename theme" : "New theme";
+    $("#theme-dlg-sub").textContent = old ? `Current name: ${old}` : "Saves the current colors (Light and Dark) as a theme.";
+    $<HTMLInputElement>("#theme-name").value = old ?? "";
+    $<HTMLDialogElement>("#theme-dlg").showModal();
+  };
+  $("#theme-cancel").onclick = () => $<HTMLDialogElement>("#theme-dlg").close();
+  $<HTMLFormElement>("#theme-form").onsubmit = (e) => {
+    e.preventDefault();
+    const inp = $<HTMLInputElement>("#theme-name");
+    const n = inp.value.trim();
+    if (n in THEMES) return inp.setCustomValidity("That name is a built-in theme"), inp.reportValidity();
+    if (renaming) {
+      const u = userThemes();
+      if (n !== renaming && n in u) return inp.setCustomValidity("A theme with that name exists"), inp.reportValidity();
+      // Rebuild to keep the card in the same spot.
+      localStorage.userThemes = JSON.stringify(Object.fromEntries(Object.entries(u).map(([k, v]) => [k === renaming ? n : k, v])));
+      if (themeName() === renaming || localStorage.themeName === renaming) localStorage.themeName = n;
+      $<HTMLDialogElement>("#theme-dlg").close();
+      return drawThemes();
+    }
+    const read = (m: string) => { try { return JSON.parse(localStorage[`themeParts:${m}`] ?? "{}"); } catch { return {}; } };
+    const base = curTheme();
+    // Snapshot what's on screen: current base theme + custom colors for both modes.
+    localStorage.userThemes = JSON.stringify({ ...userThemes(), [n]: { accent: accent(), tint: base.tint, parts: { light: read("light"), dark: read("dark") } } });
+    $<HTMLDialogElement>("#theme-dlg").close();
+    pickTheme(n);
+    drawThemes();
+  };
+  $("#theme-name").oninput = () => $<HTMLInputElement>("#theme-name").setCustomValidity("");
+  /** A selected user theme is edited live: custom colors are written back into it. */
+  const saveUser = () => {
+    const n = themeName();
+    if (n in THEMES) return retheme();
+    const u = userThemes(), read = (m: string) => { try { return JSON.parse(localStorage[`themeParts:${m}`] ?? "{}"); } catch { return {}; } };
+    u[n] = { ...u[n], parts: { light: read("light"), dark: read("dark") } };
+    localStorage.userThemes = JSON.stringify(u);
+    setTheme(isLight());
+    drawThemes();
+  };
+  setDlg.querySelectorAll<HTMLInputElement>("[data-part]").forEach((i) => (i.oninput = () => {
+    localStorage[partsKey()] = JSON.stringify({ ...parts(), [i.dataset.part!]: i.value });
+    saveUser();
+  }));
+  $("#set-parts-x").onclick = () => (localStorage.removeItem(partsKey()), saveUser());
   setDlg.querySelectorAll<HTMLElement>("[data-theme-set]").forEach((b) =>
-    (b.onclick = () => (setTheme(b.dataset.themeSet === "light", true), markTheme())));
-  $("[data-settings]").onclick = () => (markTheme(), setDlg.showModal());
-  $("#set-close").onclick = () => setDlg.close();
-  $("#set-wall").onclick = mainWall.pick;
-  $("#set-wall-x").onclick = mainWall.remove;
+    (b.onclick = () => (setTheme(b.dataset.themeSet === "light", true), drawThemes())));
+  $("[data-settings]").onclick = () => (drawThemes(), setDlg.classList.replace("hidden", "flex"));
+  $("#set-close").onclick = () => setDlg.classList.replace("flex", "hidden");
+  $("#set-wall").onclick = async () => (await mainWall.pick(), markTheme());
+  $("#set-wall-x").onclick = async () => {
+    if (!(await confirmBox("Remove background?", "The main display wallpaper will be removed.", "Remove"))) return;
+    await mainWall.remove();
+    markTheme();
+  };
+
+  // Sun Post: Postman-style HTTP client. Requests go through tauri-plugin-http (Rust), so no CORS.
+  type PostReq = { m: string; u: string; h: string; b: string };
+  const postPage = $("#post"), postForm = $<HTMLFormElement>("#post-form");
+  let postHist: PostReq[] = [];
+  try { postHist = JSON.parse(localStorage.postHist ?? "[]"); } catch {} // corrupt → start empty
+  let postRes = { body: "", heads: "" }, postShowHeads = false;
+  const postField = (n: string) => postForm.elements.namedItem(n) as HTMLInputElement;
+  const drawPostOut = () => {
+    $("#post-out").textContent = postShowHeads ? postRes.heads : postRes.body;
+    $("#post-tab").textContent = postShowHeads ? "Body" : "Headers";
+  };
+  const drawHist = () => {
+    $("#post-hist").innerHTML = postHist.map((r, i) => `<li data-h="${i}" title="${esc(r.u)}" class="flex cursor-pointer gap-2 rounded-lg px-2 py-1.5 font-mono text-xs hover:bg-zinc-800">
+      <span class="w-12 shrink-0 font-semibold text-amber-400">${esc(r.m)}</span><span class="truncate text-zinc-300">${esc(r.u.replace(/^https?:\/\//, ""))}</span></li>`).join("")
+      || `<li class="py-6 text-center text-sm text-zinc-600">No requests yet</li>`;
+  };
+  $("[data-post]").onclick = () => (drawHist(), postPage.classList.replace("hidden", "flex"), postField("u").focus());
+  $("#post-close").onclick = () => postPage.classList.replace("flex", "hidden");
+  $("#post-tab").onclick = () => ((postShowHeads = !postShowHeads), drawPostOut());
+  $("#post-clear").onclick = () => ((postHist = []), (localStorage.postHist = "[]"), drawHist());
+  $("#post-hist").onclick = (e) => {
+    const r = postHist[+((e.target as HTMLElement).closest<HTMLElement>("[data-h]")?.dataset.h ?? -1)];
+    if (r) (["m", "u", "h", "b"] as const).forEach((k) => (postField(k).value = r[k]));
+  };
+  postForm.onsubmit = async (e) => {
+    e.preventDefault();
+    const r: PostReq = { m: postField("m").value, u: withScheme(postField("u").value), h: postField("h").value, b: postField("b").value };
+    postField("u").value = r.u;
+    postHist = [r, ...postHist.filter((x) => JSON.stringify(x) !== JSON.stringify(r))].slice(0, 50);
+    localStorage.postHist = JSON.stringify(postHist);
+    drawHist();
+    const send = $<HTMLButtonElement>("#post-send"), meta = $("#post-meta"), t0 = performance.now();
+    send.disabled = true;
+    meta.textContent = "Sending…";
+    try {
+      const res = await httpFetch(r.u, { method: r.m, headers: parseHeaders(r.h), body: ["GET", "HEAD"].includes(r.m) || !r.b ? undefined : r.b });
+      const text = await res.text();
+      meta.innerHTML = `<span class="${res.ok ? "text-emerald-400" : "text-red-400"}">${res.status} ${esc(res.statusText)}</span> · ${Math.round(performance.now() - t0)} ms · ${fmtSize(new Blob([text]).size)}`;
+      postRes = { body: pretty(text), heads: [...res.headers].map(([k, v]) => `${k}: ${v}`).join("\n") };
+    } catch (err) {
+      meta.innerHTML = `<span class="text-red-400">Error</span>`;
+      postRes = { body: String(err), heads: "" };
+    }
+    send.disabled = false;
+    postShowHeads = false;
+    drawPostOut();
+  };
+
+  // Calendar app: month grid (Sunday first) | selected day's items, kept in localStorage by YYYY-MM-DD.
+  const calPage = $("#cal");
+  let calM = new Date(), calSel = new Date();
+  type CalItem = { t: string; x: string };
+  let calNotes: Record<string, CalItem[]> = {};
+  try { calNotes = JSON.parse(localStorage.calNotes ?? "{}"); } catch {} // corrupt → start empty
+  const calKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const drawDay = () => {
+    const items = calNotes[calKey(calSel)] ?? [];
+    $("#cal-dow").textContent = calSel.toLocaleString(undefined, { weekday: "long" });
+    $("#cal-day").textContent = calSel.toLocaleString(undefined, { day: "numeric", month: "long", year: "numeric" });
+    $("#cal-list").innerHTML = items.length
+      ? items.map((it, i) => `<li data-edit="${i}" title="Click to edit" class="group flex cursor-pointer items-start gap-3 rounded-lg px-2 py-1.5 hover:bg-zinc-800">
+          <span class="w-12 shrink-0 pt-0.5 font-mono text-sm text-amber-400">${esc(it.t)}</span>
+          <div class="manual cal-md min-w-0 flex-1 break-words">${calMd(it.x)}</div>
+          <button data-del="${i}" title="Delete" class="rounded p-1 text-zinc-500 opacity-0 hover:text-red-400 group-hover:opacity-100">${icon("x", "h-4 w-4")}</button>
+        </li>`).join("")
+      : `<li class="py-6 text-center text-sm text-zinc-600">No items</li>`;
+    $("#cal-list").querySelectorAll<HTMLInputElement>("input[type=checkbox]").forEach((c) => (c.disabled = false)); // marked renders task boxes disabled
+  };
+  const saveDay = (items: CalItem[]) => {
+    const k = calKey(calSel);
+    if (items.length) calNotes[k] = items.sort((a, b) => a.t.localeCompare(b.t)); // untimed ("") first
+    else delete calNotes[k];
+    localStorage.calNotes = JSON.stringify(calNotes);
+    drawCal();
+  };
+  const drawCal = () => {
+    const y = calM.getFullYear(), m = calM.getMonth(), now = new Date();
+    $("#cal-title").textContent = calM.toLocaleString(undefined, { month: "long", year: "numeric" });
+    const lead = new Date(y, m, 1).getDay();
+    const wk = (i: number) => (i % 7 === 0 || i % 7 === 6 ? "text-rose-400" : "text-zinc-400");
+    $("#cal-grid").innerHTML =
+      ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d, i) => `<span class="pb-1 text-center text-sm font-semibold ${wk(i)}">${d}</span>`).join("") +
+      // 6 full weeks; Date() rolls day 0 / day 32 over into the neighbouring months.
+      Array.from({ length: 42 }, (_, i) => {
+        const d = new Date(y, m, i - lead + 1), out = d.getMonth() !== m;
+        const today = d.toDateString() === now.toDateString(), sel = d.toDateString() === calSel.toDateString();
+        const num = today
+          ? `<span class="grid h-9 w-9 place-items-center rounded-full bg-amber-500 font-bold text-black">${d.getDate()}</span>`
+          : `<span class="grid h-9 w-9 place-items-center font-semibold ${out ? "" : i % 7 === 0 || i % 7 === 6 ? "text-rose-400" : "text-zinc-100"}">${d.getDate()}</span>`;
+        const dot = calNotes[calKey(d)] ? `<span class="ml-3 block h-2 w-2 rounded-full bg-amber-400"></span>` : "";
+        return `<button data-day="${i - lead + 1}" class="rounded-xl border p-2 text-left align-top hover:border-zinc-500 ${sel ? "border-amber-500 bg-zinc-800" : today ? "border-amber-500/50 bg-zinc-900" : "border-zinc-700 bg-zinc-900"} ${out ? "text-zinc-600 opacity-50" : ""}">${num}${dot}</button>`;
+      }).join("");
+    drawDay();
+  };
+  const calPick = (d: Date) => ((calSel = d), (calM = new Date(d.getFullYear(), d.getMonth(), 1)), drawCal());
+  $("[data-calendar]").onclick = () => (calPick(new Date()), calPage.classList.replace("hidden", "flex"));
+  $("#cal-prev").onclick = () => ((calM = new Date(calM.getFullYear(), calM.getMonth() - 1, 1)), drawCal());
+  $("#cal-next").onclick = () => ((calM = new Date(calM.getFullYear(), calM.getMonth() + 1, 1)), drawCal());
+  $("#cal-today").onclick = () => calPick(new Date());
+  $("#cal-grid").onclick = (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLElement>("[data-day]");
+    if (b) calPick(new Date(calM.getFullYear(), calM.getMonth(), +b.dataset.day!));
+  };
+  // One dialog for add (calEdit = -1) and edit; the editor renders Markdown in place as you type.
+  const calForm = $<HTMLFormElement>("#cal-form");
+  const calT = calForm.elements.namedItem("t") as HTMLInputElement;
+  const calX = createMdEditor($("#cal-editor"), { placeholder: "## Deploy prod v2   - [ ] backup db   **bold**   `code`", onSubmit: () => calForm.requestSubmit() });
+  let calEdit = -1;
+  const calOpen = (i: number) => {
+    const it = (calNotes[calKey(calSel)] ?? [])[i];
+    calEdit = it ? i : -1;
+    calT.value = it?.t ?? "";
+    calX.set(it?.x ?? "");
+    $("#cal-dlg-title").textContent = it ? "Edit item" : "New item";
+    $("#cal-dlg-day").textContent = calSel.toLocaleString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+    $<HTMLDialogElement>("#cal-dlg").showModal();
+    calX.focus();
+  };
+  $("#cal-list").onclick = (e) => {
+    const t = e.target as HTMLElement, del = t.closest<HTMLElement>("[data-del]"), row = t.closest<HTMLElement>("[data-edit]");
+    if (del) saveDay((calNotes[calKey(calSel)] ?? []).filter((_, i) => i !== +del.dataset.del!));
+    else if (row && t instanceof HTMLInputElement && t.type === "checkbox") {
+      const items = [...(calNotes[calKey(calSel)] ?? [])], i = +row.dataset.edit!;
+      items[i] = { ...items[i], x: toggleTask(items[i].x, [...row.querySelectorAll("input[type=checkbox]")].indexOf(t)) };
+      saveDay(items);
+    } else if (row && !t.closest("a, input")) calOpen(+row.dataset.edit!); // links and checkboxes keep their own click
+  };
+  calForm.onsubmit = (e) => {
+    e.preventDefault();
+    const x = calX.get().trim();
+    if (!x) return calX.focus();
+    const items = [...(calNotes[calKey(calSel)] ?? [])], it = { t: calT.value, x };
+    if (calEdit >= 0) items[calEdit] = it;
+    else items.push(it);
+    saveDay(items);
+    $<HTMLDialogElement>("#cal-dlg").close();
+  };
+  $("#cal-add").onclick = () => calOpen(-1);
+  $("#cal-cancel").onclick = () => $<HTMLDialogElement>("#cal-dlg").close();
+  $("#cal-close").onclick = () => calPage.classList.replace("flex", "hidden");
+
+  // ----- Notepad: a list of plain-text notes (newest edit first); open one to edit, saved on every keystroke -----
+  type Note = { id: number; name: string; text: string; t: number };
+  const npPage = $("#notepad"), npText = $<HTMLTextAreaElement>("#np-text"), npList = $("#np-list");
+  let notes: Note[] = [];
+  try { notes = JSON.parse(localStorage.notepadFiles ?? "[]"); } catch {} // corrupt → start empty
+  if (localStorage.notepad) notes.push({ id: Date.now(), name: "Note", text: localStorage.notepad, t: Date.now() }); // from the one-note version
+  localStorage.removeItem("notepad");
+  let npOpen: Note | null = null;
+  const npSave = () => (localStorage.notepadFiles = JSON.stringify(notes));
+  const stamp = (t: number) => new Date(t).toLocaleString("sv").slice(0, 16); // 2026-11-12 15:30
+  const npInfo = () =>
+    ($("#np-info").textContent = npOpen ? `${npOpen.name} · ${npText.value.split("\n").length} lines · ${npText.value.length} chars` : `${notes.length} notes`);
+  const npShow = (n: Note | null) => {
+    npOpen = n;
+    npList.classList.toggle("hidden", !!n);
+    npText.classList.toggle("hidden", !n);
+    $("#np-new").classList.toggle("hidden", !!n);
+    if (n) (npText.value = n.text), npText.focus();
+    else npDraw();
+    npInfo();
+  };
+  const npDraw = () => {
+    notes.sort((a, b) => b.t - a.t);
+    npList.innerHTML = notes.length
+      ? notes.map((n, i) => `<button data-n="${i}" class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-zinc-800">
+          ${icon("file", "h-4 w-4 text-amber-400")}
+          <span class="min-w-0 flex-1"><span class="block truncate text-sm font-medium">${esc(n.name)}</span>
+          <span class="block truncate text-xs text-zinc-500">${esc(n.text.slice(0, 120).replace(/\s+/g, " ")) || "Empty"}</span></span>
+          <span class="shrink-0 font-mono text-[11px] text-zinc-500">${stamp(n.t)}</span></button>`).join("")
+      : `<p class="grid h-full place-items-center text-sm text-zinc-500">No notes yet. Press New or right-click → New note.</p>`;
+  };
+  const npNew = () => {
+    const n = { id: Date.now(), name: stamp(Date.now()), text: "", t: Date.now() };
+    notes.push(n);
+    npSave();
+    npShow(n);
+  };
+  const npRename = async (n: Note) => {
+    const ask = inputBox("Rename note", n.name, "Rename", "file", "Note name");
+    $<HTMLInputElement>("#confirm-input").value = n.name; // start from the current name
+    $<HTMLButtonElement>("#confirm-ok").disabled = false;
+    const name = await ask;
+    if (name) (n.name = name), npSave(), npDraw();
+  };
+  npText.oninput = () => {
+    if (!npOpen) return;
+    npOpen.text = npText.value;
+    npOpen.t = Date.now();
+    npSave();
+    npInfo();
+  };
+  npText.onkeydown = (e) => {
+    if (e.key !== "Tab") return; // Tab types a tab instead of leaving the box
+    e.preventDefault();
+    npText.setRangeText("\t", npText.selectionStart, npText.selectionEnd, "end");
+    npText.dispatchEvent(new Event("input"));
+  };
+  npList.onclick = (e) => {
+    const b = (e.target as Element).closest<HTMLElement>("[data-n]");
+    if (b) npShow(notes[+b.dataset.n!]);
+  };
+  npList.oncontextmenu = (e) => {
+    const b = (e.target as Element).closest<HTMLElement>("[data-n]");
+    const n = b && notes[+b.dataset.n!];
+    contextMenu(e, n
+      ? [
+          ["Open", "file", () => npShow(n)],
+          ["Rename…", "pencil", () => npRename(n)],
+          ["New note", "plus", npNew],
+          ["Delete", "trash", async () => {
+            if (!(await confirmBox("Delete note?", n.name, "Delete"))) return;
+            notes = notes.filter((x) => x !== n);
+            npSave();
+            npShow(null);
+          }],
+        ]
+      : [["New note", "plus", npNew]]);
+  };
+  $("#np-new").onclick = npNew;
+  $("[data-notepad]").onclick = () => (npShow(null), npPage.classList.replace("hidden", "flex"));
+  // Back: from a note to the list, from the list to the main display
+  $("#np-close").onclick = () => (npOpen ? npShow(null) : npPage.classList.replace("flex", "hidden"));
+
+  // BaseCurves app (Navicat-style): toolbar · connection tree · Objects / table Data / Query views.
+  const bc = $("#bc");
+  type Row = Record<string, unknown>;
+  type DbConn = { id: number; name: string; url: string };
+  let bcDb: Database = db, bcOn = false, bcD: Dialect = "sqlite", bcTable = "", bcCols: Col[] = [], bcKeys: Col[] = [];
+  let bcCid = 0, bcCollapsed = false, bcDbOpen = false, bcDbList: string[] = [], bcCurDb = "", bcObjs: Row[] = [], bcSel = "", bcQRows: Row[] = [], bcDataRows: Row[] = [];
+  let bcUrl = ""; // current connection URL, with password, for switching databases
+  let dbConns: DbConn[] = [];
+  const bcMsg = (s: string, bad = false) => (($("#bc-msg").textContent = s), $("#bc-msg").classList.toggle("text-red-400", bad));
+  // Loading feedback: spinner in the status bar while anything runs, and a centred one in the pane being filled.
+  let bcBusyN = 0, bcConnecting = 0;
+  const bcBusy = (d: 1 | -1) => $("#bc-spin").classList.toggle("hidden", (bcBusyN = Math.max(0, bcBusyN + d)) === 0);
+  const loading = (el: HTMLElement, text: string) =>
+    (el.innerHTML = `<div class="flex h-full min-h-40 flex-col items-center justify-center gap-3 text-sm text-zinc-500">${spinner("h-8 w-8")}<span class="animate-pulse">${esc(text)}</span></div>`);
+  const bcConn = () => dbConns.find((c) => c.id === bcCid);
+  const kindOf = (c: DbConn) => fromUrl(c.url).kind;
+  const KIND_COLOR: Record<Kind, string> = { postgres: "#336791", mysql: "#00758f", mariadb: "#c0765a", sqlite: "#0f80cc" };
+  const badge = (k: Kind) => `<span title="${KIND_LABEL[k]}" class="grid h-5 w-5 shrink-0 place-items-center rounded-md text-white shadow" style="background:${KIND_COLOR[k]}">${icon("database", "h-3 w-3")}</span>`;
+  const caret = (open: boolean) => `<span class="w-3 shrink-0 text-zinc-500">${icon(open ? "arrowDown" : "chevronRight", "h-3 w-3")}</span>`;
+
+  // ----- views -----
+  type View = "objects" | "data" | "query";
+  const bcView = (v: View) => {
+    bc.querySelectorAll<HTMLElement>("[data-view]").forEach((s) => (s.classList.toggle("hidden", s.dataset.view !== v), s.classList.toggle("flex", s.dataset.view === v)));
+    $("#bc-views").querySelectorAll<HTMLElement>("[data-v]").forEach((b) => b.classList.toggle("on", b.dataset.v === v));
+    $("#bc-v-objects").classList.toggle("on", v === "objects");
+    $("#bc-v-query").classList.toggle("on", v === "query");
+    if (v === "query") bcEditor.focus();
+  };
+  $("#bc-views").onclick = (e) => {
+    if ((e.target as HTMLElement).closest("[data-close]")) return bcCloseData();
+    const b = (e.target as HTMLElement).closest<HTMLElement>("[data-v]");
+    if (b) bcView(b.dataset.v as View);
+  };
+  // Drag the bar between the SQL editor and the results to resize both.
+  $("#bc-split").onpointerdown = (e) => {
+    const ed = $("#bc-editor"), split = e.currentTarget as HTMLElement, y0 = e.clientY, h0 = ed.offsetHeight;
+    const max = ed.parentElement!.clientHeight - 80; // keep some of the results visible
+    split.setPointerCapture(e.pointerId);
+    split.onpointermove = (m) => (ed.style.height = `${Math.max(48, Math.min(max, h0 + m.clientY - y0))}px`);
+    split.onpointerup = () => (split.onpointermove = null);
+  };
+  $("#bc-split").ondblclick = () => ($("#bc-editor").style.height = ""); // back to default
+  $("#bc-v-objects").onclick = () => bcView("objects");
+  $("#bc-v-query").onclick = () => bcView("query");
+  const bcStatus = () => {
+    const c = bcConn();
+    $("#bc-badge").innerHTML = bcOn && c
+      ? `${badge(kindOf(c))}<span class="text-zinc-200">${esc(c.name)}</span><span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>`
+      : `${icon("unplug", "h-3.5 w-3.5")} Not connected`;
+    $("#bc-where").textContent = bcOn && c ? [c.name, bcCurDb, bcTable].filter(Boolean).join(" › ") : "";
+    for (const id of ["#bc-v-objects", "#bc-refresh", "#bc-disconnect"]) $<HTMLButtonElement>(id).disabled = !bcOn;
+  };
+
+  // ----- grid (table data, query results, objects) -----
+  const fmt = (v: unknown) => (v === null || v === undefined ? "" : typeof v === "object" ? JSON.stringify(v) : String(v));
+  const TH = "sticky top-0 z-10 border-b border-r border-zinc-800 bg-zinc-900 px-2 py-1.5 text-left text-xs font-semibold text-zinc-400 whitespace-nowrap";
+  const TD = "border-b border-r border-zinc-800/70 px-2 py-1 font-mono text-[13px] whitespace-nowrap max-w-md overflow-hidden text-ellipsis";
+  const bcGrid = (el: HTMLElement, rows: Row[], editable: boolean) => {
+    const cols = rows.length ? Object.keys(rows[0]).filter((c) => c !== "__rowid") : [];
+    const cell = (r: Row, c: string) => r[c] === null
+      ? editable ? `<td class="border-b border-r border-zinc-800/70 p-0"><input data-c="${esc(c)}" placeholder="NULL" class="w-full min-w-24 bg-transparent px-2 py-1 font-mono text-[13px] outline-none placeholder:italic placeholder:text-zinc-600 focus:bg-amber-500/10" /></td>`
+        : `<td class="${TD} italic text-zinc-600">NULL</td>`
+      : editable ? `<td class="border-b border-r border-zinc-800/70 p-0"><input data-c="${esc(c)}" value="${esc(fmt(r[c]))}" class="w-full min-w-24 bg-transparent px-2 py-1 font-mono text-[13px] outline-none focus:bg-amber-500/10" /></td>`
+      : `<td class="${TD}" title="${esc(fmt(r[c]))}">${esc(fmt(r[c]))}</td>`;
+    el.innerHTML = rows.length
+      ? `<table class="min-w-full border-collapse"><thead><tr><th class="${TH} w-10 text-right">#</th>${cols.map((c) => `<th class="${TH}">${esc(c)}</th>`).join("")}</tr></thead><tbody>${rows
+          .map((r, i) => `<tr data-k="${editable ? esc(JSON.stringify(bcKey(r))) : ""}" class="group odd:bg-zinc-900/40 hover:bg-zinc-800/60">
+            <td class="border-b border-r border-zinc-800/70 px-1 text-right font-mono text-[11px] text-zinc-600">${i + 1}</td>${cols.map((c) => cell(r, c)).join("")}</tr>`)
+          .join("")}</tbody></table>`
+      : `<p class="py-10 text-center text-sm text-zinc-600">No rows</p>`;
+  };
+  const bcKey = (r: Row) => (bcD === "sqlite" ? [r.__rowid] : bcKeys.map((k) => r[k.name]));
+  const download = (name: string, text: string | Uint8Array<ArrayBuffer>, type = "text/csv") => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob(type === "text/csv" ? ["﻿", text] : [text], { type })); // BOM so Excel reads CSV as UTF-8 (Thai)
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+
+  // ----- connection tree -----
+  const bcTree = () => {
+    const f = $<HTMLInputElement>("#bc-tree-q").value.trim().toLowerCase();
+    const row = (lvl: number, attrs: string, inner: string, on = false) =>
+      `<div ${attrs} style="padding-left:${0.25 + lvl * 1}rem" class="group flex cursor-pointer select-none items-center gap-1.5 rounded-md py-1 pr-1.5 hover:bg-zinc-800 ${on ? "bg-amber-500/15 text-amber-200" : ""}">${inner}</div>`;
+    const tables = (lvl: number) => {
+      const ts = bcObjs.filter((o) => String(o.name).toLowerCase().includes(f));
+      return ts.map((o) => row(lvl, `data-t="${esc(o.name)}" title="${esc(o.name)}"`,
+        `<span class="w-3"></span><span class="${o.type === "view" ? "text-sky-400" : "text-emerald-400"}">${icon(o.type === "view" ? "grid" : "table", "h-3.5 w-3.5")}</span><span class="truncate">${esc(o.name)}</span>`, o.name === bcTable)).join("")
+        || `<p style="padding-left:${1.5 + lvl}rem" class="py-1 text-xs text-zinc-600">${f ? "No match" : "No tables"}</p>`;
+    };
+    $("#bc-tree").innerHTML = dbConns.map((c) => {
+      const active = c.id === bcCid && bcOn, open = active && !bcCollapsed, k = kindOf(c);
+      let html = row(0, `data-cid="${c.id}" title="${esc(c.url)}"`,
+        `${bcConnecting === c.id ? spinner("h-3 w-3") : caret(open)}${badge(k)}<span class="min-w-0 flex-1 truncate ${active ? "font-medium text-zinc-100" : ""}">${esc(c.name)}</span>
+         ${active ? `<span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>` : ""}`);
+      if (!open) return html;
+      if (bcD === "sqlite") return html + tables(1);
+      for (const n of bcDbList) {
+        const cur = n === bcCurDb, show = cur && (bcDbOpen || !!f); // a filter unfolds the current database
+        html += row(1, `data-db="${esc(n)}"`, `${caret(show)}<span class="text-amber-400">${icon("database", "h-3.5 w-3.5")}</span><span class="truncate ${cur ? "text-zinc-100" : "text-zinc-400"}">${esc(n)}</span>`);
+        if (show) html += tables(2);
+      }
+      return html;
+    }).join("") || `<div class="px-3 py-6 text-center text-xs text-zinc-500">No connections yet<br><button id="bc-first" class="mt-3 rounded-lg bg-amber-500 px-3 py-1.5 font-medium text-black hover:bg-amber-400">+ New Connection</button></div>`;
+    document.getElementById("bc-first")?.addEventListener("click", () => bcEdit());
+  };
+  $("#bc-tree-q").oninput = bcTree;
+  const bcList = async () => {
+    dbConns = await db.select<DbConn[]>("SELECT * FROM db_conns ORDER BY name");
+    bcTree();
+  };
+  $("#bc-tree").onclick = async (e) => {
+    const t = e.target as HTMLElement;
+    const tb_ = t.closest<HTMLElement>("[data-t]"), dbr = t.closest<HTMLElement>("[data-db]"), cr = t.closest<HTMLElement>("[data-cid]");
+    if (tb_) return bcLoad(tb_.dataset.t!);
+    if (dbr) return dbr.dataset.db === bcCurDb ? ((bcDbOpen = !bcDbOpen), bcTree()) : bcConnect(withDb(bcUrl, dbr.dataset.db!), bcCid, true);
+    const c = dbConns.find((x) => x.id === +cr?.dataset.cid!);
+    if (!c) return;
+    if (c.id === bcCid && bcOn) return (bcCollapsed = !bcCollapsed), bcTree();
+    bcOpenConn(c);
+  };
+  const bcDelConn = async (c: DbConn) => {
+    if (!(await confirmBox("Delete connection?", c.name, "Delete"))) return;
+    if (c.id === bcCid) await bcDisconnect();
+    await db.execute("DELETE FROM db_conns WHERE id=$1", [c.id]);
+    await invoke("del_secret", { id: dbSecret(c.id) });
+    bcList();
+  };
+  const bcOpenConn = async (c: DbConn) => {
+    let pw = await invoke<string>("get_secret", { id: dbSecret(c.id) });
+    if (!pw && kindOf(c) !== "sqlite") {
+      const p = await askPw(c.name);
+      if (p === null) return;
+      pw = p;
+    }
+    bcConnect(withPw(c.url, pw), c.id);
+  };
+
+  // ----- right-click menus (shared contextMenu) -----
+  const tableMenu = (name: string): MenuItem[] => [
+    ["Open Table", "table", () => bcLoad(name)],
+    ["Query Table", "code", () => (bcEditor.newTab(`SELECT * FROM ${qid(bcD, name)} LIMIT 100;`), bcView("query"))],
+    ...exportItems(name, tableRows(name), "Export "),
+    ["Copy Name", "file", () => navigator.clipboard.writeText(name)],
+    ["Delete Table", "trash", () => bcDrop(name)],
+  ];
+  $("#bc-tree").oncontextmenu = (e) => {
+    const t = e.target as HTMLElement, tr = t.closest<HTMLElement>("[data-t]"), dbr = t.closest<HTMLElement>("[data-db]");
+    const c = dbConns.find((x) => x.id === +t.closest<HTMLElement>("[data-cid]")?.dataset.cid!);
+    if (tr) return contextMenu(e, tableMenu(tr.dataset.t!));
+    if (dbr) {
+      const name = dbr.dataset.db!, cur = name === bcCurDb;
+      return contextMenu(e, [
+        cur ? ["Refresh", "refresh", () => $("#bc-refresh").click()] : ["Open Database", "database", () => bcConnect(withDb(bcUrl, name), bcCid, true)],
+        ["Copy Name", "file", () => navigator.clipboard.writeText(name)],
+      ]);
+    }
+    if (!c) return e.preventDefault();
+    const on = c.id === bcCid && bcOn;
+    contextMenu(e, [
+      on ? ["Close Connection", "unplug", () => bcDisconnect()] : ["Open Connection", "plug", () => bcOpenConn(c)],
+      ...(on ? [["New Query", "code", () => (bcEditor.newTab(""), bcView("query"))] as MenuItem] : []),
+      ["Edit Connection…", "pencil", () => bcEdit(c)],
+      ["Delete Connection", "trash", () => bcDelConn(c)],
+    ]);
+  };
+  $("#bc-objects").oncontextmenu = (e) => {
+    const r = (e.target as HTMLElement).closest<HTMLElement>("[data-o]");
+    if (!r) return e.preventDefault();
+    bcSel = r.dataset.o!;
+    bcDrawObjects();
+    contextMenu(e, tableMenu(bcSel));
+  };
+  const cellMenu = (e: MouseEvent, editable: boolean) => {
+    const t = e.target as HTMLElement, td = t.closest("td"), tr = t.closest("tr");
+    if (!td || !tr || !tr.closest("tbody")) return e.preventDefault();
+    const inp = td.querySelector<HTMLInputElement>("input[data-c]");
+    const val = inp ? inp.value : td.textContent ?? "";
+    const k = editable ? rowKey(tr) : null;
+    const rowCsv = () => [...tr.querySelectorAll("td")].slice(1).map((c) => c.querySelector("input")?.value ?? c.textContent ?? "").join(",");
+    contextMenu(e, [
+      ["Copy Value", "file", () => navigator.clipboard.writeText(val)],
+      ["Copy Row", "table", () => navigator.clipboard.writeText(rowCsv())],
+      ...(k && inp ? [
+        ["Set NULL", "x", () => bcSetNull(inp.dataset.c!, k)] as MenuItem,
+        ["Delete Row", "trash", () => bcDelRow(k)] as MenuItem,
+      ] : []),
+    ]);
+  };
+  $("#bc-grid").oncontextmenu = (e) => cellMenu(e, true);
+  $("#bc-qgrid").oncontextmenu = (e) => cellMenu(e, false);
+  const bcSetNull = async (colName: string, k: unknown[]) => {
+    const col = bcCols.find((c) => c.name === colName) ?? { name: colName, type: "", pk: false };
+    try {
+      await bcDb.execute(updateSql(bcD, bcTable, col, bcKeys), [null, ...k.map((v) => arg(bcD, v))]);
+      bcMsg(`${colName} set to NULL`);
+      bcLoad(bcTable);
+    } catch (err) { bcMsg(String(err), true); }
+  };
+
+  // ----- objects / table data -----
+  const bcObjects = async () => {
+    bcObjs = await bcDb.select<Row[]>(objectsSql(bcD));
+    bcDrawObjects();
+    bcTree();
+  };
+  const bcDrawObjects = () => {
+    const f = $<HTMLInputElement>("#bc-o-q").value.trim().toLowerCase();
+    const rows = bcObjs.filter((o) => String(o.name).toLowerCase().includes(f));
+    const cols = bcObjs.length ? Object.keys(bcObjs[0]) : ["name"];
+    $("#bc-objects").innerHTML = rows.length
+      ? `<table class="min-w-full border-collapse text-sm"><thead><tr>${cols.map((c) => `<th class="${TH} capitalize">${esc(c.replace(/_/g, " "))}</th>`).join("")}</tr></thead><tbody>${rows.map((o) =>
+          `<tr data-o="${esc(o.name)}" title="Double-click to open" class="cursor-default select-none hover:bg-zinc-800/60 ${o.name === bcSel ? "!bg-amber-500/15" : ""}">${cols.map((c, i) =>
+            i === 0 ? `<td class="${TD} font-sans"><span class="flex items-center gap-2"><span class="${o.type === "view" ? "text-sky-400" : "text-emerald-400"}">${icon(o.type === "view" ? "grid" : "table", "h-4 w-4")}</span>${esc(o.name)}</span></td>`
+            : `<td class="${TD} text-zinc-400">${esc(fmt(o[c]))}</td>`).join("")}</tr>`).join("")}</tbody></table>`
+      : `<p class="py-16 text-center text-sm text-zinc-600">${bcOn ? (f ? "No match" : "No tables in this database") : "Pick a connection on the left, or create one with Connection"}</p>`;
+    for (const id of ["#bc-o-open", "#bc-o-drop", "#bc-o-csv"]) $<HTMLButtonElement>(id).disabled = !bcSel;
+    $<HTMLButtonElement>("#bc-o-new").disabled = !bcOn;
+  };
+  $("#bc-o-q").oninput = bcDrawObjects;
+  $("#bc-objects").onclick = (e) => {
+    const r = (e.target as HTMLElement).closest<HTMLElement>("[data-o]");
+    bcSel = r?.dataset.o ?? "";
+    bcDrawObjects();
+  };
+  $("#bc-objects").ondblclick = (e) => {
+    const r = (e.target as HTMLElement).closest<HTMLElement>("[data-o]");
+    if (r) bcLoad(r.dataset.o!);
+  };
+  $("#bc-o-open").onclick = () => bcSel && bcLoad(bcSel);
+  $("#bc-o-new").onclick = () => {
+    const id = bcD === "postgres" ? "id bigserial PRIMARY KEY" : bcD === "mysql" ? "id BIGINT AUTO_INCREMENT PRIMARY KEY" : "id INTEGER PRIMARY KEY";
+    bcEditor.newTab(`CREATE TABLE new_table (\n  ${id},\n  name TEXT NOT NULL,\n  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);`);
+    bcView("query");
+  };
+  $("#bc-o-drop").onclick = () => bcDrop(bcSel);
+  const bcDrop = async (name: string) => {
+    const o = bcObjs.find((x) => x.name === name);
+    if (!o) return;
+    const kind = String(o.type ?? "table").toUpperCase();
+    if (!(await confirmBox(`Delete ${kind.toLowerCase()}?`, `DROP ${kind} ${name} — this cannot be undone.`, "Delete"))) return;
+    try {
+      await bcDb.execute(`DROP ${kind} ${qid(bcD, name)}`);
+      bcMsg(`Dropped ${name}`);
+      if (bcTable === name) bcCloseData();
+      if (bcSel === name) bcSel = "";
+      await bcObjects();
+      bcSchema();
+    } catch (err) { bcMsg(String(err), true); }
+  };
+  /** Export as Excel / CSV / JSON; `get` fetches the rows once a format is picked. */
+  const exportItems = (name: string, get: () => Promise<Row[]>, prefix = ""): MenuItem[] => {
+    const go = (ext: string, conv: (r: Row[]) => string | Uint8Array<ArrayBuffer>, type: string) => async () => {
+      try {
+        const rows = await get();
+        download(`${name}.${ext}`, conv(rows), type);
+        bcMsg(`Exported ${rows.length} row(s) to ${name}.${ext}`);
+      } catch (err) { bcMsg(String(err), true); }
+    };
+    return [
+      [`${prefix}Excel (.xlsx)`, "table", go("xlsx", toXlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")],
+      [`${prefix}CSV`, "download", go("csv", toCsv, "text/csv")],
+      [`${prefix}JSON`, "code", go("json", (rows) => JSON.stringify(rows.map(({ __rowid, ...o }) => o), null, 2), "application/json")],
+    ];
+  };
+  /** Drop the format menu under the clicked Export button. */
+  const exportMenu = (e: MouseEvent, name: string, get: () => Promise<Row[]>) => {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    contextMenu(Object.assign(e, { clientX: r.left, clientY: r.bottom + 4 }), exportItems(name, get));
+  };
+  const tableRows = (t: string) => () => bcDb.select<Row[]>(`SELECT * FROM ${qid(bcD, t)}`);
+  $("#bc-o-csv").onclick = (e) => bcSel && exportMenu(e, bcSel, tableRows(bcSel));
+  $("#bc-d-csv").onclick = (e) => bcTable && exportMenu(e, bcTable, tableRows(bcTable));
+  $("#bc-q-csv").onclick = (e) => (bcQRows.length ? exportMenu(e, "query", async () => bcQRows) : bcMsg("Run a SELECT first", true));
+
+  const dataTab = () => $("#bc-views").querySelector<HTMLElement>('[data-v="data"]')!;
+  const bcCloseData = () => {
+    bcTable = "";
+    dataTab().classList.add("hidden");
+    bcView("objects");
+    bcStatus();
+  };
+  const bcLoad = async (t: string) => {
+    bcTable = t;
+    bcSel = t;
+    dataTab().classList.remove("hidden");
+    dataTab().querySelector("span")!.textContent = t;
+    bcView("data");
+    bcTree();
+    bcStatus();
+    loading($("#bc-grid"), `Loading ${t}…`);
+    $<HTMLButtonElement>("#bc-add").disabled = true;
+    bcBusy(1);
+    try {
+      bcCols = bcD === "sqlite" ? [] : await bcDb.select<Col[]>(colsSql(bcD), [bcD === "postgres" ? qid(bcD, t) : t]);
+      bcKeys = bcD === "sqlite" ? [{ name: "rowid", type: "", pk: true }] : bcCols.filter((c) => Number(c.pk));
+      bcDataRows = await bcDb.select<Row[]>(selectSql(bcD, t));
+      bcGrid($("#bc-grid"), bcDataRows, bcKeys.length > 0);
+      $<HTMLButtonElement>("#bc-add").disabled = false;
+      bcMsg(`${t}: ${bcDataRows.length} row(s)${bcDataRows.length === 500 ? " (first 500)" : ""}${bcKeys.length ? "" : " · no primary key, read-only"}`);
+    } catch (e) { bcMsg(String(e), true); $("#bc-grid").innerHTML = ""; } finally { bcBusy(-1); }
+  };
+  $("#bc-d-refresh").onclick = () => bcTable && bcLoad(bcTable);
+  $("#bc-refresh").onclick = async () => {
+    bcBusy(1);
+    $("#bc-refresh").querySelector("svg")?.classList.add("animate-spin");
+    try { await bcObjects(); bcSchema(); if (bcTable) await bcLoad(bcTable); bcMsg("Refreshed"); } catch (err) { bcMsg(String(err), true); }
+    finally { bcBusy(-1); $("#bc-refresh").querySelector("svg")?.classList.remove("animate-spin"); }
+  };
+  const rowKey = (el: Element) => JSON.parse((el.closest("tr") as HTMLElement).dataset.k || "null") as unknown[] | null;
+  $("#bc-grid").addEventListener("change", async (e) => {
+    const i = e.target as HTMLInputElement, k = rowKey(i);
+    if (!i.dataset.c || !k) return;
+    const col = bcCols.find((c) => c.name === i.dataset.c) ?? { name: i.dataset.c, type: "", pk: false };
+    try {
+      await bcDb.execute(updateSql(bcD, bcTable, col, bcKeys), [i.value, ...k].map((v) => arg(bcD, v)));
+      bcMsg(`Saved ${col.name}`);
+      i.classList.add("text-emerald-300");
+      if (Number(col.pk)) bcLoad(bcTable); // key changed: refresh so the row is addressed by its new key
+    } catch (err) { bcMsg(String(err), true); bcLoad(bcTable); }
+  });
+  $("#bc-grid").addEventListener("keydown", (e) => e.key === "Enter" && (e.target as HTMLElement).blur());
+  const bcDelRow = async (k: unknown[]) => {
+    if (!(await confirmBox("Delete row?", `${bcKeys.map((c) => c.name).join(", ")} = ${k.join(", ")} in ${bcTable}`, "Delete"))) return;
+    try { await bcDb.execute(deleteSql(bcD, bcTable, bcKeys), k.map((v) => arg(bcD, v))); } catch (err) { bcMsg(String(err), true); }
+    bcLoad(bcTable);
+  };
+  $("#bc-add").onclick = async () => {
+    try { await bcDb.execute(insertSql(bcD, bcTable)); await bcLoad(bcTable); } catch (err) { bcMsg(String(err), true); }
+  };
+
+  $("[data-basecurves]").onclick = () => (bc.classList.replace("hidden", "flex"), bcList(), bcDrawObjects(), bcStatus());
+  $("#bc-close").onclick = () => bc.classList.replace("flex", "hidden");
+
+  // ----- connection dialog (Navicat-style form): URL without password in sqlite, password in the OS credential store -----
+  await db.execute("CREATE TABLE IF NOT EXISTS db_conns (id INTEGER PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NULL)");
+  const dbSecret = (id: number) => -id; // keyring slot: negative ids so they never clash with SSH connection ids
+  const bcDlg = $<HTMLDialogElement>("#bc-dlg"), bcForm = $<HTMLFormElement>("#bc-form");
+  const fEl = (n: string) => bcForm.elements.namedItem(n) as HTMLInputElement;
+  const setKind = (k: Kind, fill: boolean) => {
+    fEl("kind").value = k;
+    $("#bc-dlg-title").textContent = `${fEl("id").value ? "Edit" : "New"} Connection (${KIND_LABEL[k]})`;
+    $("#bc-kinds").querySelectorAll<HTMLElement>("[data-kind]").forEach((b) => b.classList.toggle("on", b.dataset.kind === k));
+    bcForm.querySelectorAll<HTMLElement>("[data-kinds]").forEach((el) => {
+      const on = el.dataset.kinds === "all" || el.dataset.kinds === (k === "sqlite" ? "sqlite" : "net");
+      el.classList.toggle("hidden", !on);
+      if (el instanceof HTMLInputElement) el.disabled = !on; // hidden fields skip validation
+    });
+    if (fill) for (const [n, v] of Object.entries(DEFAULTS[k])) fEl(n).value = v;
+    if (k === "sqlite") showTab("General");
+  };
+  const showTab = (t: string) => {
+    bcForm.querySelectorAll<HTMLElement>("[data-tab]").forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
+    bcForm.querySelectorAll<HTMLElement>("[data-pane]").forEach((p) => p.classList.toggle("hidden", p.dataset.pane !== t));
+  };
+  $("#bc-tabs").onclick = (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLElement>("[data-tab]");
+    if (b) showTab(b.dataset.tab!);
+  };
+  const sshOn = $<HTMLInputElement>("#bc-ssh-on"), sshSel = $<HTMLSelectElement>("#bc-ssh");
+  sshOn.onchange = () => (sshSel.disabled = !sshOn.checked);
+  /** SSH tunnel first (if the URL asks for one), then the URL the driver should dial. */
+  const dial = async (input: string) => {
+    const t = tunnelOf(input);
+    if (!t) return input;
+    const c = conns.find((x) => x.id === t.ssh);
+    if (!c) throw "The SSH server for this connection no longer exists — pick another on the SSH tab.";
+    bcMsg(`Opening SSH tunnel via ${c.name}…`);
+    const port = await invoke<number>("ssh_tunnel", {
+      id: c.id, host: c.host, port: c.port, user: c.user, keyPath: c.key_path, remoteHost: t.host, remotePort: t.port,
+    });
+    return viaLocal(input, port);
+  };
+  $("#bc-kinds").onclick = (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLElement>("[data-kind]");
+    if (b) setKind(b.dataset.kind as Kind, true);
+  };
+  const bcEdit = async (c?: DbConn) => {
+    bcForm.reset();
+    $("#bc-test-msg").textContent = "";
+    fEl("id").value = c ? String(c.id) : "";
+    fEl("name").value = c?.name ?? "";
+    const f = c ? fromUrl(c.url) : null;
+    sshSel.innerHTML = conns.map((s) => `<option value="${s.id}">${esc(s.name)} (${esc(s.user)}@${esc(s.host)})</option>`).join("") || `<option value="">No SSH servers — add one in DevOps</option>`;
+    sshOn.checked = !!f?.ssh;
+    if (f?.ssh) sshSel.value = f.ssh;
+    sshOn.onchange!(new Event("change"));
+    showTab("General");
+    if (!c || !f) return setKind("postgres", true), bcDlg.showModal();
+    setKind(f.kind, false);
+    for (const n of ["host", "port", "database", "user", "file"] as const) fEl(n).value = f[n];
+    const pw = await invoke<string>("get_secret", { id: dbSecret(c.id) });
+    fEl("secret").value = pw;
+    fEl("savepw").checked = !!pw;
+    bcDlg.showModal();
+  };
+  const formUrl = () => toUrl({
+    ...(Object.fromEntries(["kind", "host", "port", "database", "user", "file"].map((n) => [n, fEl(n).value])) as ConnForm),
+    ssh: sshOn.checked ? sshSel.value : "",
+  });
+  $("#bc-new").onclick = $("#bc-new2").onclick = () => bcEdit();
+  $("#bc-cancel").onclick = () => bcDlg.close();
+  $("#bc-test").onclick = async () => {
+    if (!bcForm.reportValidity()) return;
+    const msg = $("#bc-test-msg");
+    msg.className = "mt-4 min-h-4 font-mono text-xs text-zinc-500";
+    msg.textContent = "Connecting…";
+    try {
+      const { url } = connUrl(await dial(withPw(formUrl(), fEl("secret").value)));
+      const t = await Database.load(url, { autoCreate: false });
+      await t.select("SELECT 1");
+      if (t.path !== db.path && t.path !== bcDb.path) await t.close(t.path).catch(() => {});
+      msg.textContent = "Connection successful";
+      msg.classList.add("text-emerald-400");
+    } catch (err) { msg.textContent = String(err); msg.classList.add("text-red-400"); }
+  };
+  bcForm.onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const url = formUrl(), name = fEl("name").value.trim();
+      let id = +fEl("id").value;
+      if (id) await db.execute("UPDATE db_conns SET name=$1, url=$2 WHERE id=$3", [name, url, id]);
+      else id = (await db.execute("INSERT INTO db_conns (name, url) VALUES ($1, $2)", [name, url])).lastInsertId!;
+      const keep = fEl("kind").value !== "sqlite" && fEl("savepw").checked;
+      await invoke("set_secret", { id: dbSecret(id), secretValue: keep ? fEl("secret").value : "" }); // blank = remove saved password
+      bcDlg.close();
+      bcList();
+    } catch (err) { $("#bc-test-msg").textContent = String(err); }
+  };
+  /** Password for a connection whose password isn't saved; null = cancelled. */
+  const askPw = (name: string) => new Promise<string | null>((done) => {
+    const d = $<HTMLDialogElement>("#bc-pw"), i = $<HTMLInputElement>("#bc-pw-in");
+    $("#bc-pw-title").textContent = `Password for ${name}`;
+    i.value = "";
+    d.returnValue = "";
+    d.onclose = () => done(d.returnValue === "ok" ? i.value : null);
+    d.showModal();
+  });
+
+  // ----- connect / disconnect -----
+  // The SQL plugin keeps one pool per URL; only the latest connect wins, and the old pool is closed by name.
+  let bcGen = 0;
+  const bcConnect = async (input: string, cid: number, openDb = false) => {
+    const gen = ++bcGen;
+    bcMsg("Connecting…");
+    bcConnecting = cid;
+    bcTree();
+    loading($("#bc-objects"), `Connecting to ${dbConns.find((c) => c.id === cid)?.name ?? "database"}…`);
+    bcView("objects");
+    bcBusy(1);
+    try {
+      const { url, d } = connUrl(await dial(input));
+      bcMsg("Connecting…");
+      const next = await Database.load(url, { autoCreate: d === "sqlite" });
+      if (gen !== bcGen) return; // a newer connect started meanwhile
+      if (bcDb.path !== db.path && bcDb.path !== next.path) await bcDb.close(bcDb.path).catch(() => {}); // never close the app's own store
+      (bcDb = next), (bcD = d), (bcOn = true), (bcUrl = url), (bcCid = cid), (bcCollapsed = d === "sqlite" && !openDb), (bcDbOpen = openDb), (bcSel = "");
+      if (bcTable) bcCloseData();
+      bcCurDb = d === "sqlite" ? "" : decodeURIComponent(new URL(url).pathname.slice(1));
+      bcDbList = d === "sqlite" ? [] : (await bcDb.select<{ name: string }[]>(dbsSql(d))).map((r) => r.name);
+      await bcObjects();
+      bcEditor.setDialect(d);
+      bcSchema();
+      bcView("objects");
+      bcStatus();
+      bcMsg(`Connected to ${bcConn()?.name ?? ""}${bcCurDb ? ` › ${bcCurDb}` : ""}`);
+    } catch (err) {
+      if (gen === bcGen) (bcMsg(String(err), true), bcDrawObjects());
+    } finally {
+      bcBusy(-1);
+      if (gen === bcGen) (bcConnecting = 0), bcTree();
+    }
+  };
+  const bcDisconnect = async () => {
+    if (bcOn && bcDb.path !== db.path) await bcDb.close(bcDb.path).catch(() => {});
+    (bcDb = db), (bcOn = false), (bcCid = 0), (bcObjs = []), (bcDbList = []), (bcCurDb = ""), (bcSel = "");
+    bcCloseData();
+    bcDrawObjects();
+    bcTree();
+    bcMsg("Disconnected");
+  };
+  $("#bc-disconnect").onclick = bcDisconnect;
+
+  // ----- query editor -----
+  /** Runs one or more statements in order; the last read's rows go to the result grid. Stops at the first error. */
+  const bcRun = async (sql: string) => {
+    if (!bcOn) return bcMsg("Connect to a database first", true);
+    bcView("query");
+    const parts = statements(sql).map((s) => sql.slice(s.from, s.to));
+    let changed = false, affected = 0;
+    const t0 = performance.now();
+    const runBtn = $<HTMLButtonElement>("#bc-run"), runHtml = runBtn.innerHTML;
+    runBtn.disabled = $<HTMLButtonElement>("#bc-runall").disabled = true;
+    runBtn.innerHTML = `${spinner("h-3.5 w-3.5")} Running`;
+    loading($("#bc-qgrid"), "Running query…");
+    bcBusy(1);
+    let shown = false;
+    for (const [i, q] of parts.entries()) {
+      try {
+        if (isRead(q)) {
+          bcQRows = await bcDb.select<Row[]>(q);
+          bcGrid($("#bc-qgrid"), bcQRows, false);
+          shown = true;
+          bcMsg(`${bcQRows.length} row(s) · ${Math.round(performance.now() - t0)} ms`);
+        } else {
+          affected += (await bcDb.execute(q)).rowsAffected;
+          changed = true;
+          bcMsg(`${parts.length > 1 ? `${i + 1}/${parts.length} statements · ` : ""}${affected} row(s) affected · ${Math.round(performance.now() - t0)} ms`);
+        }
+      } catch (err) {
+        bcMsg(`${parts.length > 1 ? `Statement ${i + 1}: ` : ""}${err}`, true);
+        break;
+      }
+    }
+    if (!shown) $("#bc-qgrid").innerHTML = `<p class="py-10 text-center text-sm text-zinc-600">${changed ? "Done — see the status bar for rows affected" : "No result"}</p>`;
+    runBtn.innerHTML = runHtml;
+    runBtn.disabled = $<HTMLButtonElement>("#bc-runall").disabled = false;
+    bcBusy(-1);
+    if (changed) { // DDL/DML may have changed tables or columns
+      await bcObjects().catch(() => {});
+      bcSchema();
+    }
+  };
+  const bcEditor = createSqlEditor($("#bc-editor"), $("#bc-qtabs"), bcRun);
+  $("#bc-run").onclick = () => (bcEditor.focus(), bcEditor.runCurrent());
+  $("#bc-runall").onclick = () => (bcEditor.focus(), bcEditor.runAll());
+  $("#bc-newq").onclick = () => (bcEditor.newTab(bcTable ? `SELECT * FROM ${qid(bcD, bcTable)} LIMIT 100;` : ""), bcView("query"));
+  /** Column names for autocomplete; best-effort (completion just has fewer names if it fails). */
+  const bcSchema = () => bcDb.select<{ t: string; c: string; ty: string }[]>(schemaSql(bcD)).then(bcEditor.setSchema, () => {});
+
+  // ---------- app switcher (iPhone-style): swipe an app away to free what it holds ----------
+  type SwApp = { name: string; art: keyof typeof ART; detail: () => string; kill: () => unknown };
+  const SW: Record<string, SwApp> = {
+    devops: {
+      name: "DevOps", art: "devops",
+      detail: () => (tabs.length ? `${tabs.length} SSH tab${tabs.length > 1 ? "s" : ""} open` : "No sessions"),
+      kill: () => [...tabs].forEach((t) => closeTab(t.key)), // ends SSH sessions, disposes terminals
+    },
+    basecurves: {
+      name: "BaseCurves", art: "database",
+      detail: () => (bcOn ? `Connected · ${bcConn()?.name ?? ""}` : "Not connected"),
+      kill: async () => {
+        await bcDisconnect();
+        await invoke("ssh_tunnels_close").catch(() => {});
+        bcQRows = [];
+        bcDataRows = [];
+        $("#bc-qgrid").innerHTML = "";
+        bcEditor.setSchema([]);
+        bc.classList.replace("flex", "hidden");
+      },
+    },
+    calendar: { name: "Calendar", art: "calendar", detail: () => "Notes by day", kill: () => calPage.classList.replace("flex", "hidden") },
+    notepad: { name: "Notepad", art: "notepad", detail: () => (npOpen ? `Editing ${npOpen.name}` : `${notes.length} notes`), kill: () => npPage.classList.replace("flex", "hidden") },
+    post: {
+      name: "Sun Post", art: "post", detail: () => (postRes.body ? "Holding last response" : "Idle"),
+      kill: () => ((postRes = { body: "", heads: "" }), drawPostOut(), postPage.classList.replace("flex", "hidden")),
+    },
+  };
+  const running = new Set<string>();
+  const tiles = () => Object.keys(SW).map((k) => [k, document.querySelector<HTMLElement>(`#launcher [data-${k}]`)] as const);
+  // a small dot under running apps on the main display, like a dock
+  tiles().forEach(([, b]) => b?.insertAdjacentHTML("beforeend", `<span data-run-dot class="invisible -mt-1 h-1.5 w-1.5 rounded-full bg-amber-400"></span>`));
+  const swMark = () => {
+    if (tabs.length) running.add("devops");
+    $("#sw-n").textContent = String(running.size);
+    $("#sw-n").classList.toggle("hidden", !running.size);
+    tiles().forEach(([k, b]) => b?.querySelector("[data-run-dot]")?.classList.toggle("invisible", !running.has(k)));
+  };
+
+  // ----- nav bar: Back · Home · Running apps -----
+  // Screens: the main display ("home"), the DevOps workspace (under the launcher), and full-screen app pages.
+  const PAGES: Record<string, string> = { basecurves: "#bc", calendar: "#cal", post: "#post", notepad: "#notepad", settings: "#settings" };
+  const screenNow = () =>
+    Object.keys(PAGES).find((k) => !$(PAGES[k]).classList.contains("hidden")) ?? ($("#launcher").classList.contains("hidden") ? "devops" : "home");
+  const navHist: string[] = [];
+  let navigating = false;
+  const hideAll = () => {
+    Object.values(PAGES).forEach((sel) => $(sel).classList.replace("flex", "hidden"));
+    swShow(false);
+  };
+  const goTo = (k: string) => {
+    hideAll();
+    $("#launcher").classList.replace("hidden", "flex");
+    swMark();
+    if (k === "home") return;
+    navigating = true; // the tile click below must not record history again
+    document.querySelector<HTMLElement>(`#launcher [data-${k}]`)?.click();
+    navigating = false;
+  };
+  $("#launcher").addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest("button");
+    const k = b && [...Object.keys(SW), "settings"].find((x) => b.hasAttribute(`data-${x}`));
+    if (!k) return;
+    if (!navigating) navHist.push(screenNow());
+    if (SW[k]) running.add(k), swMark();
+  });
+  $("#nav-home").onclick = () => {
+    if (screenNow() !== "home") navHist.push(screenNow());
+    goTo("home");
+  };
+  $("#nav-back").onclick = () => {
+    if (!$("#switcher").classList.contains("hidden")) return swShow(false);
+    const now = screenNow();
+    let prev = navHist.pop();
+    // skip stale entries: the screen we're on, or an app that was swiped away
+    while (prev && (prev === now || (SW[prev] && !running.has(prev) && prev !== "devops"))) prev = navHist.pop();
+    goTo(prev ?? "home");
+  };
+  $("#nav-apps").onclick = () => swShow($("#switcher").classList.contains("hidden"));
+  const mem = () => {
+    const m = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory; // Chromium/WebView2 only
+    return m ? `JS memory ${(m.usedJSHeapSize / 1048576).toFixed(0)} MB` : "";
+  };
+  const swDraw = () => {
+    swMark();
+    $("#sw-mem").textContent = mem();
+    $("#sw-mem").classList.toggle("hidden", !mem());
+    $<HTMLButtonElement>("#sw-clear").disabled = !running.size;
+    $("#sw-cards").innerHTML = running.size
+      ? [...running].map((k) => `<div data-app="${k}" class="relative flex h-[55vh] max-h-[26rem] w-60 shrink-0 cursor-grab select-none flex-col items-center justify-center gap-4 rounded-[2rem] border border-zinc-700 bg-gradient-to-b from-zinc-800 to-zinc-900 shadow-2xl shadow-black/60 transition-[transform,opacity] duration-300 active:cursor-grabbing">
+          <button data-kill title="Close ${SW[k].name}" class="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-zinc-950/70 text-zinc-400 hover:bg-red-500 hover:text-white">${icon("x", "h-4 w-4")}</button>
+          ${appArt(SW[k].art, "h-24 w-24 drop-shadow-[0_10px_14px_rgb(0_0_0/0.5)]")}
+          <p class="text-lg font-semibold">${SW[k].name}</p>
+          <p class="px-4 text-center text-xs text-zinc-400">${esc(SW[k].detail())}</p>
+          <p class="absolute bottom-4 flex items-center gap-1 text-[11px] text-zinc-500">${icon("arrowUp", "h-3 w-3")} swipe up to close</p>
+        </div>`).join("")
+      : `<p class="w-full text-center text-zinc-500">No apps running</p>`;
+  };
+  const swShow = (on: boolean) => ($("#switcher").classList.toggle("hidden", !on), $("#switcher").classList.toggle("flex", on), $("#nav-apps").classList.toggle("on", on), $("#navbar").classList.toggle("open", on), on && swDraw());
+  const swKill = async (k: string, card?: HTMLElement) => {
+    if (card) (card.style.transform = "translateY(-120vh)"), (card.style.opacity = "0");
+    running.delete(k);
+    await SW[k].kill();
+    setTimeout(swDraw, card ? 250 : 0);
+  };
+  $("#sw-close").onclick = () => swShow(false);
+  $("#sw-clear").onclick = async () => {
+    $("#sw-cards").querySelectorAll<HTMLElement>("[data-app]").forEach((c, i) => setTimeout(() => ((c.style.transform = "translateY(-120vh)"), (c.style.opacity = "0")), i * 60));
+    for (const k of [...running]) (running.delete(k), await SW[k].kill());
+    setTimeout(swDraw, 400);
+  };
+  addEventListener("keydown", (e) => e.key === "Escape" && !$("#switcher").classList.contains("hidden") && swShow(false));
+  // swipe: drag a card up past 120px to close it; a tap opens the app
+  let drag: { card: HTMLElement; y0: number; dy: number } | null = null;
+  $("#sw-cards").onpointerdown = (e) => {
+    const t = e.target as HTMLElement, card = t.closest<HTMLElement>("[data-app]");
+    if (!card) return;
+    if (t.closest("[data-kill]")) return void swKill(card.dataset.app!, card);
+    drag = { card, y0: e.clientY, dy: 0 };
+    card.setPointerCapture(e.pointerId);
+    card.style.transition = "none";
+  };
+  $("#sw-cards").onpointermove = (e) => {
+    if (!drag) return;
+    drag.dy = Math.min(0, e.clientY - drag.y0);
+    drag.card.style.transform = `translateY(${drag.dy}px) scale(${1 + drag.dy / 3000})`;
+    drag.card.style.opacity = String(1 + drag.dy / 500);
+  };
+  $("#sw-cards").onpointerup = $("#sw-cards").onpointercancel = (e) => {
+    if (!drag) return;
+    const { card, dy } = drag, k = card.dataset.app!;
+    drag = null;
+    card.style.transition = "";
+    if (dy < -120) return void swKill(k, card);
+    card.style.transform = "";
+    card.style.opacity = "";
+    if (e.type === "pointerup" && dy > -6) {
+      swShow(false);
+      document.querySelector<HTMLElement>(`#launcher [data-${k}]`)?.click();
+    }
+  };
 
   wireRunDialog();
 
@@ -657,8 +2098,6 @@ function renderList() {
               <span class="block truncate font-mono text-[11px] text-zinc-500">${esc(c.user)}@${esc(c.host)}${c.port === 22 ? "" : `:${c.port}`}</span>
             </span>
           </button>
-          <button data-edit="${c.id}" title="Edit" class="hidden rounded px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-700 hover:text-zinc-200 group-hover:block">${icon("pencil", "h-3.5 w-3.5")}</button>
-          <button data-del="${c.id}" title="Delete" class="mr-1 hidden rounded px-2 py-1 text-xs text-zinc-500 hover:bg-red-500/15 hover:text-red-400 group-hover:block">${icon("x", "h-3.5 w-3.5")}</button>
         </div>`;
       }).join("")
     : `<p class="px-3 py-6 text-center text-xs text-zinc-600">${conns.length ? "No match" : "No servers yet"}</p>`;
@@ -672,25 +2111,20 @@ function renderList() {
       activeKey = t.key;
       renderTabs();
     };
-    b.oncontextmenu = (e) => contextMenu(e, [["New session", "plus", () => openTab(c)]]);
+    // Edit / delete live on the right-click menu (no hover buttons).
+    b.oncontextmenu = (e) => contextMenu(e, [
+      [tabs.some((t) => t.conn.id === c.id) ? "New session" : "Connect", "plus", () => openTab(c)],
+      ["Edit…", "pencil", () => openForm(c)],
+      ["Copy host", "file", () => navigator.clipboard.writeText(`${c.user}@${c.host}${c.port === 22 ? "" : `:${c.port}`}`)],
+      ["Delete", "trash", async () => {
+        const open = tabs.filter((t) => t.conn.id === c.id);
+        if (!(await confirmBox("Delete server?", `${c.name}${open.length ? ` — ${open.length} open tab(s) will close` : ""}`, "Delete"))) return;
+        open.forEach((t) => closeTab(t.key));
+        await deleteConn(c.id);
+        await refreshList();
+      }],
+    ]);
   });
-  $("#list").querySelectorAll<HTMLElement>("[data-edit]").forEach((b) =>
-    (b.onclick = () => openForm(conns.find((c) => c.id === +b.dataset.edit!))));
-  // Two-click delete: first click arms, second confirms.
-  $("#list").querySelectorAll<HTMLElement>("[data-del]").forEach((b) =>
-    (b.onclick = async () => {
-      if (!b.dataset.armed) {
-        b.dataset.armed = "1";
-        b.textContent = "Delete?";
-        b.classList.add("block", "text-red-400");
-        setTimeout(() => b.isConnected && renderList(), 3000);
-        return;
-      }
-      const id = +b.dataset.del!;
-      tabs.filter((t) => t.conn.id === id).forEach((t) => closeTab(t.key));
-      await deleteConn(id);
-      await refreshList();
-    }));
 }
 
 function openTab(c: Conn) {
@@ -722,6 +2156,7 @@ function connect(tab: Tab, attempt = 1, lastErr = "") {
           ${appTile("deploy", "rocket", "Deploy", true)}
           ${appTile("term-app", "terminal", "Terminal")}
           ${appTile("files-app", "folder", "Files")}
+          ${appTile("cron-app", "clock", "Cron")}
         </div>
       </div>
       <section data-log-panel class="absolute inset-y-0 right-0 z-40 hidden w-[26rem] flex-col border-l border-zinc-800 bg-zinc-900 shadow-2xl shadow-black/50">
@@ -734,9 +2169,8 @@ function connect(tab: Tab, attempt = 1, lastErr = "") {
     </div>
     <div data-view="deploy" class="absolute inset-0 hidden flex-col">
       <div class="flex items-center gap-2 border-b border-zinc-800 px-4 py-2.5">
-        <button data-back class="flex items-center gap-1 rounded-lg px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("chevronLeft")} ${esc(c.name)}</button>
-        <span class="text-zinc-600">/</span>
-        <span class="flex items-center gap-2 text-sm font-semibold"><span class="text-amber-400">${icon("rocket")}</span> Deploy</span>
+        ${backBtn("data-back", c.name)}
+        ${appTitle("rocket", "Deploy", esc(c.name))}
       </div>
       <div class="flex min-h-0 flex-1">
         <aside class="flex w-64 shrink-0 flex-col border-r border-zinc-800">
@@ -751,40 +2185,41 @@ function connect(tab: Tab, attempt = 1, lastErr = "") {
           <div data-qbar class="hidden space-y-2 border-t border-zinc-800 p-3">
             <div class="flex items-center gap-2 text-xs">
               <span data-qcount class="flex-1 font-medium text-zinc-200"></span>
-              <button data-qall class="rounded px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100">ทั้งหมด</button>
-              <button data-qclear class="rounded px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100">ล้าง</button>
+              <button data-qall class="rounded px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100">All</button>
+              <button data-qclear class="rounded px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100">Clear</button>
             </div>
-            <label class="flex items-center gap-2 text-[11px] text-zinc-500">ถ้าตัวไหนพัง
+            <label class="flex items-center gap-2 text-[11px] text-zinc-500">On failure
               <select data-qfail class="flex-1 rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-amber-500">
-                <option value="stop">หยุดคิว</option>
-                <option value="skip">ข้ามไปตัวถัดไป</option>
+                <option value="stop">Stop the queue</option>
+                <option value="skip">Skip to the next one</option>
               </select>
             </label>
             <button data-qapply class="flex w-full items-center justify-center gap-2 rounded-lg bg-amber-500 px-3 py-2 text-sm font-medium text-black hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-40">${icon("rocket")} <span data-qlabel>Apply</span></button>
-            <p class="text-center text-[11px] text-zinc-500">ถาม tag ครบทุกตัวก่อน แล้วรันทีละตัวตามลำดับเลข</p>
+            <p class="text-center text-[11px] text-zinc-500">Asks for every tag first, then runs them one by one in order</p>
           </div>
         </aside>
         <main class="flex min-w-0 flex-1 flex-col">
           <div class="flex items-center gap-2 border-b border-zinc-800 px-5 py-2">
             <h2 data-title class="min-w-0 flex-1 truncate font-mono text-sm"></h2>
-            <div class="dp-seg" role="tablist" aria-label="มุมมอง">
-              <button data-v="easy" title="ฟอร์ม กด + เพิ่มทีละอย่าง">ฟอร์ม</button>
-              <button data-v="yaml" title="แก้ YAML ตรงๆ">YAML</button>
+            <div class="dp-seg" role="tablist" aria-label="View">
+              <button data-v="easy" title="Form: press + to add things one at a time">Form</button>
+              <button data-v="yaml" title="Edit the YAML directly">YAML</button>
               <span class="dp-seg-sep"></span>
-              <button data-v="flow" title="ดูขั้นตอนเป็นแผนผัง + จำลอง">Flow</button>
-              <button data-v="sh" title="สคริปต์ bash ที่จะรันบนเครื่องจริง">sh</button>
+              <button data-v="flow" title="See the steps as a diagram + simulate">Flow</button>
+              <button data-v="sh" title="The bash script that will run on the machine">sh</button>
             </div>
-            <button data-manual title="คู่มือ" class="dp-icon">${icon("book")}</button>
+            <button data-manual title="Manual" class="dp-icon">${icon("book")}</button>
             <details data-more class="relative">
-              <summary title="เพิ่มเติม" class="dp-icon list-none">${icon("dots")}</summary>
+              <summary title="More" class="dp-icon list-none">${icon("dots")}</summary>
               <div class="absolute right-0 z-50 mt-1 w-60 rounded-xl border border-zinc-700 bg-zinc-900/95 p-1 text-sm text-zinc-100 shadow-2xl shadow-black/50 backdrop-blur">
-                <button data-savesh class="dp-mi">${icon("file")}<span><span class="block">Save sh ลงเครื่อง</span><span class="block text-[11px] text-zinc-500">ไว้รันเองใน Terminal ไม่มีรหัส sudo ข้างใน</span></span></button>
+                <button data-savesh class="dp-mi">${icon("file")}<span><span class="block">Save sh to the machine</span><span class="block text-[11px] text-zinc-500">Run it yourself in Terminal; no sudo password inside</span></span></button>
                 <div data-delwrap class="mt-1 border-t border-zinc-800 pt-1">
-                  <button data-del class="dp-mi text-red-400 hover:bg-red-500/10!">${icon("trash")}<span data-deltext>ลบ deployment นี้</span></button>
+                  <button data-del class="dp-mi text-red-400 hover:bg-red-500/10!">${icon("trash")}<span data-deltext>Delete this deployment</span></button>
                 </div>
               </div>
             </details>
-            <button data-apply class="ml-1 flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-1.5 text-sm font-medium text-black hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-40">${icon("rocket")} Apply</button>
+            <button data-dsave title="Save without deploying (Ctrl+S), even if unfinished" class="ml-1 rounded-lg border border-zinc-700 px-3 py-1.5 text-sm font-medium text-zinc-200 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40">Save</button>
+            <button data-apply class=" flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-1.5 text-sm font-medium text-black hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-40">${icon("rocket")} Apply</button>
           </div>
           <p data-err class="min-h-5 px-5 pt-1 text-xs text-red-400"></p>
           <div data-easy class="hidden min-h-0 flex-1 overflow-auto"></div>
@@ -793,8 +2228,9 @@ function connect(tab: Tab, attempt = 1, lastErr = "") {
           <div data-dpanel class="flex h-60 shrink-0 flex-col border-t border-zinc-800 bg-zinc-950">
             <div class="flex items-center px-5 pt-1.5">
               <p class="flex-1 text-[11px] font-medium uppercase tracking-wider text-zinc-500">Deploy log</p>
+              <button data-dmounts title="Show what is mounted on the machine" class="flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100">${icon("folder", "h-3 w-3")} Mounts</button>
               <button data-dclear title="Clear log" class="flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100">${icon("trash", "h-3 w-3")} Clear</button>
-              <button data-dfull title="Full screen (Esc เพื่อออก)" class="ml-1 flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100"></button>
+              <button data-dfull title="Full screen (Esc to exit)" class="ml-1 flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100"></button>
             </div>
             <div data-dlog class="min-h-0 flex-1 overflow-auto px-5 py-1 font-mono text-xs leading-6"></div>
           </div>
@@ -803,18 +2239,16 @@ function connect(tab: Tab, attempt = 1, lastErr = "") {
     </div>
     <div data-view="term" class="absolute inset-0 hidden flex-col">
       <div class="flex items-center gap-2 border-b border-zinc-800 px-4 py-2.5">
-        <button data-back class="flex items-center gap-1 rounded-lg px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("chevronLeft")} ${esc(c.name)}</button>
-        <span class="text-zinc-600">/</span>
-        <span class="flex items-center gap-2 text-sm font-semibold"><span class="text-amber-400">${icon("terminal")}</span> Terminal</span>
+        ${backBtn("data-back", c.name)}
+        ${appTitle("terminal", "Terminal", esc(c.name))}
         <span class="ml-auto font-mono text-xs text-zinc-500">${esc(c.user)}@${esc(c.host)}</span>
       </div>
       <div data-term class="min-h-0 flex-1 p-2"></div>
     </div>
     <div data-view="files" class="absolute inset-0 hidden flex-col">
       <div class="flex items-center gap-2 border-b border-zinc-800 px-4 py-2.5">
-        <button data-back class="flex items-center gap-1 rounded-lg px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("chevronLeft")} ${esc(c.name)}</button>
-        <span class="text-zinc-600">/</span>
-        <span class="flex items-center gap-2 text-sm font-semibold"><span class="text-amber-400">${icon("folder")}</span> Files</span>
+        ${backBtn("data-back", c.name)}
+        ${appTitle("folder", "Files", esc(c.name))}
         <details class="relative ml-auto">
           <summary class="cursor-pointer list-none rounded-lg px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">Settings</summary>
           <div class="absolute right-0 z-50 mt-1 min-w-48 rounded-xl border border-zinc-700 bg-zinc-900/95 p-1 text-sm shadow-2xl shadow-black/50">
@@ -829,6 +2263,8 @@ function connect(tab: Tab, attempt = 1, lastErr = "") {
       <form data-fbar class="flex items-center gap-1 border-b border-zinc-800 px-4 py-2">
         <button type="button" data-up title="Up one folder" class="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("arrowUp")}</button>
         <button type="button" data-frefresh title="Refresh" class="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("refresh")}</button>
+        <button type="button" data-fnew="file" title="New file" class="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("file")}</button>
+        <button type="button" data-fnew="folder" title="New folder" class="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("folder")}</button>
         <input data-path spellcheck="false" class="ml-1 flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 font-mono text-sm outline-none focus:border-amber-500" />
       </form>
       <div class="flex min-h-0 flex-1">
@@ -842,7 +2278,28 @@ function connect(tab: Tab, attempt = 1, lastErr = "") {
           </div>
           <pre data-fbody class="min-h-0 flex-1 overflow-auto whitespace-pre p-4 font-mono text-xs leading-5"></pre>
           <div data-fed class="hidden min-h-0 flex-1"></div>
+          <div data-fmedia class="hidden min-h-0 flex-1 place-items-center overflow-auto bg-[conic-gradient(#27272a_25%,#18181b_0_50%,#27272a_0_75%,#18181b_0)] bg-[length:16px_16px]"></div>
         </section>
+      </div>
+    </div>
+    <div data-view="cron" class="absolute inset-0 hidden flex-col">
+      <div class="flex items-center gap-2 border-b border-zinc-800 px-4 py-2.5">
+        ${backBtn("data-back", c.name)}
+        ${appTitle("clock", "Cron", esc(c.name))}
+        <span data-cmsg class="ml-auto text-xs text-zinc-500"></span>
+        <button data-cadd class="flex items-center gap-1 rounded-lg border border-zinc-700 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800">${icon("plus")} Add job</button>
+        <button data-crefresh title="Reload from the machine (drops unsaved changes)" class="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("refresh")}</button>
+        <button data-csave disabled class="rounded-lg bg-amber-500 px-4 py-1.5 text-sm font-medium text-black hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-40">Save</button>
+      </div>
+      <datalist id="cron-presets-${sid}">
+        <option value="* * * * *">every minute</option><option value="*/5 * * * *">every 5 minutes</option>
+        <option value="0 * * * *">every hour</option><option value="0 3 * * *">every day at 03:00</option>
+        <option value="0 3 * * 0">every Sunday at 03:00</option><option value="0 0 1 * *">1st of every month</option>
+        <option value="@reboot">at boot</option>
+      </datalist>
+      <div class="min-h-0 flex-1 overflow-auto p-4">
+        <p class="mb-3 text-xs text-zinc-500">Crontab of <span class="font-mono">${esc(c.user)}</span>. Schedule = minute hour day month weekday. Comments and variables in the file are kept as they are.</p>
+        <div data-clist class="space-y-1.5"></div>
       </div>
     </div>
     <div data-loading class="absolute inset-0 z-50 grid place-items-center bg-zinc-950/40 backdrop-blur-md">
@@ -855,14 +2312,15 @@ function connect(tab: Tab, attempt = 1, lastErr = "") {
   const log = makeLog(q("[data-log]"));
   const ctx: DeployCtx = { sid, connId: c.id, log: makeLog(q("[data-dlog]")) };
   const openDeploy = deployPage(ctx, q('[data-view="deploy"]'));
-  type View = "home" | "deploy" | "term" | "files";
+  type View = "home" | "deploy" | "term" | "files" | "cron";
   let cur: View = "home";
   const setWhere = () => {
     tab.where = `/devops/server/${tab.conn.id}${cur === "home" ? "" : `/${cur}`}`;
     showWhere();
   };
   const openFiles = filesPage(sid, c.id, q('[data-view="files"]'));
-  const view = (v: "home" | "deploy" | "term" | "files") => {
+  const openCron = cronPage(sid, q('[data-view="cron"]'), () => view("term"));
+  const view = (v: View) => {
     tab.pane.querySelectorAll<HTMLElement>("[data-view]").forEach((el) => {
       el.classList.toggle("hidden", el.dataset.view !== v);
       el.classList.toggle("flex", el.dataset.view === v);
@@ -905,6 +2363,7 @@ function connect(tab: Tab, attempt = 1, lastErr = "") {
   term.open(q("[data-term]"));
   q("[data-term-app]").onclick = () => view("term");
   q("[data-files-app]").onclick = () => (view("files"), openFiles());
+  q("[data-cron-app]").onclick = () => (view("cron"), openCron());
 
   let closed = false;
   const cleanups: (() => void)[] = [];
@@ -1027,6 +2486,94 @@ async function runSetup(sid: number, log: (level: LogLevel, text: string) => voi
   }
 }
 
+// ---------- cron page (edit the user's crontab, written only on Save) ----------
+
+/** Wires the Cron page of one machine; returns a function to call each time the page is shown. */
+function cronPage(sid: number, root: HTMLElement, openTerm: () => void) {
+  const q = <T extends HTMLElement = HTMLElement>(sel: string) => root.querySelector<T>(sel)!;
+  const list = q("[data-clist]");
+  const save = q<HTMLButtonElement>("[data-csave]");
+  const msg = (t: string, err = false) => {
+    q("[data-cmsg]").textContent = t;
+    q("[data-cmsg]").classList.toggle("text-red-400", err);
+  };
+  type Job = Extract<CronLine, { job: true }>;
+  let lines: CronLine[] = [];
+  let loaded = false;
+  const dirty = (d = true) => (save.disabled = !d);
+
+  function render() {
+    const jobs = lines.filter((l): l is Job => l.job);
+    list.innerHTML = jobs.length
+      ? jobs.map((j, i) => `
+        <div data-i="${i}" class="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 p-2">
+          <label title="Enabled" class="shrink-0 cursor-pointer">
+            <input type="checkbox" data-on ${j.on ? "checked" : ""} class="peer sr-only" />
+            <span class="relative block h-5 w-9 rounded-full bg-zinc-700 transition-colors peer-checked:bg-amber-500 peer-focus-visible:ring-2 peer-focus-visible:ring-amber-500/50 after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-transform peer-checked:after:translate-x-4"></span>
+          </label>
+          <input data-sched value="${esc(j.sched)}" list="cron-presets-${sid}" spellcheck="false" placeholder="* * * * *" aria-label="Schedule" class="w-44 shrink-0 rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 font-mono text-sm outline-none focus:border-amber-500 [&.bad]:border-red-500" />
+          <input data-cmd value="${esc(j.cmd)}" spellcheck="false" placeholder="command" aria-label="Command" class="min-w-0 flex-1 rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 font-mono text-sm outline-none focus:border-amber-500" />
+          <button data-run title="Open Terminal in this job's folder" class="rounded p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("terminal")}</button>
+          <button data-rm title="Delete job" class="rounded p-1.5 text-zinc-500 hover:bg-red-500/10 hover:text-red-400">${icon("trash")}</button>
+        </div>`).join("")
+      : `<p class="px-3 py-6 text-center text-xs text-zinc-600">No cron jobs yet</p>`;
+    list.querySelectorAll<HTMLElement>("[data-i]").forEach((row) => {
+      const j = jobs[+row.dataset.i!];
+      const s = row.querySelector<HTMLInputElement>("[data-sched]")!;
+      const check = () => s.classList.toggle("bad", !validSched(s.value));
+      check();
+      row.querySelector<HTMLInputElement>("[data-on]")!.onchange = (e) => ((j.on = (e.target as HTMLInputElement).checked), dirty());
+      s.oninput = () => ((j.sched = s.value), check(), dirty());
+      row.querySelector<HTMLInputElement>("[data-cmd]")!.oninput = (e) => ((j.cmd = (e.target as HTMLInputElement).value), dirty());
+      row.querySelector<HTMLElement>("[data-rm]")!.onclick = () => ((lines = lines.filter((l) => l !== j)), render(), dirty());
+      row.querySelector<HTMLElement>("[data-run]")!.onclick = () => {
+        openTerm();
+        const cd = cdLine(j.cmd);
+        if (cd) invoke("term_write", { sid, data: `${cd}\r` }).catch(() => {});
+      };
+    });
+  }
+
+  async function load() {
+    msg("Loading…");
+    try {
+      const r = await invoke<ExecOut>("remote_exec", { sid, command: CRON_READ });
+      if (r.code) throw r.out.trim() || `exit ${r.code}`;
+      lines = parseCrontab(r.out);
+      loaded = true;
+      msg("");
+      dirty(false);
+      render();
+    } catch (err) {
+      msg(String(err), true);
+    }
+  }
+
+  q("[data-cadd]").onclick = () => {
+    lines.push({ job: true, on: true, sched: "0 3 * * *", cmd: "" });
+    render();
+    dirty();
+    list.querySelector<HTMLInputElement>("[data-i]:last-child [data-cmd]")?.focus();
+  };
+  q("[data-crefresh]").onclick = load;
+  save.onclick = async () => {
+    const jobs = lines.filter((l): l is Job => l.job);
+    if (jobs.some((j) => !validSched(j.sched))) return msg("Fix the red schedules first", true);
+    if (jobs.some((j) => !j.cmd.trim())) return msg("Every job needs a command", true);
+    save.disabled = true;
+    msg("Saving…");
+    try {
+      const r = await invoke<ExecOut>("remote_exec", { sid, command: CRON_WRITE, stdin: serializeCrontab(lines) });
+      if (r.code) throw r.out.trim() || `exit ${r.code}`; // crontab rejects bad syntax and keeps the old one
+      msg("Saved");
+    } catch (err) {
+      msg(`Save failed: ${err}`, true);
+      dirty();
+    }
+  };
+  return () => loaded || load();
+}
+
 // ---------- files page (browse + edit, saved only on Save) ----------
 
 /** Wires the Files page of one machine; returns a function to call each time the page is shown. */
@@ -1099,10 +2646,33 @@ function filesPage(sid: number, connId: number, root: HTMLElement) {
     if (file) stat(dirty() ? "● Unsaved changes" : "", "text-amber-400");
   };
   const ed = createEditor(q("[data-fed]"), onEdit);
-  const showEditor = (on: boolean) => {
-    body.classList.toggle("hidden", on);
-    q("[data-fed]").classList.toggle("hidden", !on);
+  const media = q("[data-fmedia]");
+  let blobUrl = "";
+  const show = (which: "body" | "ed" | "media") => {
+    body.classList.toggle("hidden", which !== "body");
+    q("[data-fed]").classList.toggle("hidden", which !== "ed");
+    media.classList.toggle("hidden", which !== "media");
+    media.classList.toggle("grid", which === "media");
+    if (which !== "media") {
+      media.innerHTML = "";
+      if (blobUrl) URL.revokeObjectURL(blobUrl), (blobUrl = "");
+    }
   };
+  const showEditor = (on: boolean) => show(on ? "ed" : "body");
+  /** Image / SVG (<img>, so SVG scripts never run) or PDF (webview's built-in viewer). */
+  async function showMedia(path: string, e: Entry, mime: string) {
+    if (e.size > MEDIA_MAX) return void (body.textContent = `Too large to preview (${fmtSize(e.size)} > ${fmtSize(MEDIA_MAX)}).`);
+    const r = await run(mediaScript(path));
+    if (r.code) throw r.out.trim() || `exit ${r.code}`;
+    if (q("[data-fname]").textContent !== path) return; // another file was opened meanwhile
+    show("media");
+    blobUrl = URL.createObjectURL(new Blob([Uint8Array.from(atob(r.out.trim()), (c) => c.charCodeAt(0))], { type: mime }));
+    media.innerHTML =
+      mime === "application/pdf"
+        ? `<iframe src="${blobUrl}" class="h-full w-full self-stretch justify-self-stretch border-0"></iframe>`
+        : `<img src="${blobUrl}" class="max-h-full max-w-full object-contain p-4" />`;
+    stat(fmtSize(e.size));
+  }
   /** True when it's fine to drop what's in the editor. */
   const canLeave = async () => !dirty() || confirmBox("Discard changes?", `${file!.path} has unsaved changes.`, "Discard");
 
@@ -1117,6 +2687,8 @@ function filesPage(sid: number, connId: number, root: HTMLElement) {
     showEditor(false);
     showPrev(true);
     try {
+      const mime = mimeFor(e.name);
+      if (mime) return await showMedia(path, e, mime);
       const r = await run(readScript(path));
       if (r.code) throw r.out.trim() || `exit ${r.code}`;
       if (/[\0�]/.test(r.out)) return void (body.textContent = "Binary file, no preview.");
@@ -1170,11 +2742,26 @@ function filesPage(sid: number, connId: number, root: HTMLElement) {
   });
   q("[data-up]").onclick = () => go(parentOf(cur));
   q("[data-frefresh]").onclick = () => go(cur);
+  root.querySelectorAll<HTMLElement>("[data-fnew]").forEach((b) => {
+    const dir = b.dataset.fnew === "folder";
+    b.onclick = async () => {
+      const name = await inputBox(dir ? "New folder" : "New file", joinPath(cur, ""), "Create", dir ? "folder" : "file", dir ? "folder-name" : "filename.txt");
+      if (!name) return;
+      const fail = (m: string) => list.insertAdjacentHTML("afterbegin", `<p class="px-3 py-2 font-mono text-xs text-red-400">${esc(m)}</p>`);
+      if (name.includes("/")) return void fail(`Name can't contain "/"`);
+      const path = joinPath(cur, name);
+      const r = await run(dir ? mkdirScript(path) : newFileScript(path)).catch((e) => ({ out: String(e), code: 1 }));
+      await go(cur);
+      if (r.code) fail(r.out.trim() || `exit ${r.code}`);
+      else if (!dir) preview({ name, dir: false, size: 0, mtime: "" }); // straight into the editor
+    };
+  });
   q<HTMLFormElement>("[data-fbar]").onsubmit = (e) => (e.preventDefault(), go(input.value.trim() || "~"));
   q("[data-fx]").onclick = async () => {
     if (!(await canLeave())) return;
     file = null;
     onEdit();
+    show("body");
     showPrev(false);
   };
 
@@ -1191,10 +2778,9 @@ function filesPage(sid: number, connId: number, root: HTMLElement) {
 type ExecOut = { out: string; code: number };
 type DeployCtx = { sid: number; connId: number; log: (level: LogLevel, text: string) => void };
 
-// Login shell so PATH matches an interactive session (nvm, pm2, …).
-const SHELL = "bash -l -s";
-const remote = (ctx: DeployCtx, command: string, stdin?: string, stream = false) =>
-  invoke<ExecOut>("remote_exec", { sid: ctx.sid, command, stdin, stream });
+const SHELL = SHELL_CMD;
+const remote = (ctx: DeployCtx, command: string, stdin?: string, stream = false, timeoutMs?: number) =>
+  invoke<ExecOut>("remote_exec", { sid: ctx.sid, command, stdin, stream, timeoutMs });
 
 /** Timestamped, coloured log lines appended to `box`. */
 function makeLog(box: HTMLElement) {
@@ -1224,6 +2810,7 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
     envNames: async (file) => (await remote(ctx, scripts.envNames(file))).out.split("\n").filter(Boolean),
     // same shell + env file as a deploy, so pm2 from nvm / a PATH set in the env file is found
     pm2Apps: async (envFrom) => parsePm2((await remote(ctx, SHELL, scripts.pm2Apps(envFrom))).out),
+    mounts: async (paths) => parseMounts((await remote(ctx, scripts.mounts(paths))).out),
     icon,
   });
   const flow = createFlow(q("[data-flowbox]"), (text, step) => ctx.log(step ? "step" : "info", `[sim] ${text}`));
@@ -1268,7 +2855,7 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
     if (m === "easy") {
       const err = easy.load(ed.get());
       if (err) {
-        q("[data-err]").textContent = `แก้ YAML ให้ถูกก่อนถึงจะเปิดโหมดง่ายได้ - ${err}`;
+        q("[data-err]").textContent = `Fix the YAML before the form can open - ${err}`;
         m = "yaml";
         remember = false;
       }
@@ -1279,7 +2866,7 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
     if (m === "yaml") ed.focus();
   };
   const resetDel = () => {
-    q("[data-deltext]").textContent = "ลบ deployment นี้";
+    q("[data-deltext]").textContent = "Delete this deployment";
     delete q("[data-del]").dataset.armed;
   };
   const closeMore = () => (q<HTMLDetailsElement>("[data-more]").removeAttribute("open"), resetDel());
@@ -1307,7 +2894,47 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
     q("[data-err]").textContent = "";
     setMode(localStorage.deployMode === "yaml" ? "yaml" : "easy", false); // the form falls back to YAML if it can't read the file
     if (!q("[data-err]").textContent) validate();
+    if (name && running.has(name) && !busy) watch(name);
   }
+
+  /** Re-attaches to a deploy still running on the machine (e.g. started before the connection dropped). */
+  async function watch(name: string) {
+    ctx.log("info", `[${name}] still deploying on the machine, following its log…`);
+    if (validate()) showFlow(true);
+    setBusy(true);
+    try {
+      await followDeploy(ctx, name, flow);
+    } finally {
+      setBusy(false);
+    }
+    refresh();
+  }
+
+  // ----- list look: icon per deployment + display order, kept on this computer per machine -----
+  // ponytail: stale entries of deleted/renamed deployments stay in localStorage (tiny, harmless)
+  type Look = { order: string[]; icons: Record<string, string> }; // icons: Lucide names
+  const lookKey = `deployLook:${ctx.connId}`;
+  const getLook = (): Look => {
+    try { return { order: [], icons: {}, ...JSON.parse(localStorage[lookKey] ?? "{}") }; } catch { return { order: [], icons: {} }; }
+  };
+  const putLook = (l: Look) => (localStorage[lookKey] = JSON.stringify(l));
+  const icoHtml = (k?: string) => (k && lucide(k)) || icon("plus", "h-3.5 w-3.5");
+  const chooseIcon = async (b: HTMLElement) => {
+    const name = b.dataset.ico!, k = await pickIcon();
+    if (k === null) return;
+    const l = getLook();
+    if (k) l.icons[name] = k;
+    else delete l.icons[name];
+    putLook(l);
+    b.innerHTML = icoHtml(k);
+    b.classList.toggle("is-empty", !k);
+  };
+  const saveOrder = () => {
+    const l = getLook();
+    l.order = [...root.querySelectorAll<HTMLElement>("[data-row]")].map((r) => r.dataset.row!);
+    names = l.order;
+    putLook(l);
+  };
 
   async function refresh() {
     const list = q("[data-list]");
@@ -1315,18 +2942,23 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
     try {
       // each line: "<name> <tag> ok|failed <date> <time>" or "<name> never"
       const rows = (await remote(ctx, scripts.list)).out.trim().split("\n").filter(Boolean).map((l) => l.split(" "));
+      const look = getLook();
+      const rank = (n: string) => (look.order.includes(n) ? look.order.indexOf(n) : 1e9); // new ones go last
+      rows.sort((a, b) => rank(a[0]) - rank(b[0]));
       names = rows.map((r) => r[0]);
+      running = new Set(rows.filter((r) => r[1] === "running").map((r) => r[0]));
       picked = picked.filter((n) => names.includes(n));
       list.innerHTML = rows.length
         ? rows
             .map(([name, ...st]) => `
-              <div data-row="${esc(name)}" class="dp-row">
-                <button data-pick="${esc(name)}" class="dp-pick" title="เลือกเข้าคิว Apply หลายตัว (ลำดับตามที่กด)"></button>
+              <div data-row="${esc(name)}" class="dp-row" draggable="true" title="Drag to reorder (or Alt+↑/↓)">
+                <button data-pick="${esc(name)}" class="dp-pick" title="Add to the Apply queue (runs in the order picked)"></button>
+                <button data-ico="${esc(name)}" class="dp-ico${look.icons[name] ? "" : " is-empty"}" title="Choose icon">${icoHtml(look.icons[name])}</button>
                 <button data-dep="${esc(name)}" class="flex min-w-0 flex-1 items-center gap-2.5 py-2 pr-3 text-left">
                   ${dot(st[1] === "ok" ? "live" : st[1] === "failed" ? "closed" : undefined)}
                   <span class="min-w-0 flex-1">
                     <span class="block truncate font-mono text-sm">${esc(name)}</span>
-                    <span data-sub class="block truncate text-[11px] text-zinc-500">${esc(st[0] === "never" ? "never deployed" : st.join(" "))}</span>
+                    <span data-sub class="block truncate text-[11px] text-zinc-500">${esc(st[0] === "never" ? "never deployed" : st[0] === "running" ? "deploying… (open to watch)" : st.join(" "))}</span>
                   </span>
                 </button>
               </div>`)
@@ -1334,6 +2966,39 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
         : `<p class="px-3 py-2 text-xs text-zinc-500">None yet</p>`;
       list.querySelectorAll<HTMLElement>("[data-dep]").forEach((b) => (b.onclick = () => select(b.dataset.dep!)));
       list.querySelectorAll<HTMLElement>("[data-pick]").forEach((b) => (b.onclick = () => togglePick(b.dataset.pick!)));
+      list.querySelectorAll<HTMLElement>("[data-ico]").forEach((b) => (b.onclick = () => chooseIcon(b)));
+      // reorder: native drag and drop moves the row live, the order is saved when the drag ends
+      let dragged: HTMLElement | null = null;
+      list.querySelectorAll<HTMLElement>("[data-row]").forEach((row) => {
+        row.ondragstart = (e) => {
+          dragged = row;
+          e.dataTransfer!.effectAllowed = "move";
+          e.dataTransfer!.setData("text/plain", row.dataset.row!);
+          row.classList.add("is-drag");
+        };
+        row.ondragover = (e) => {
+          if (!dragged || dragged === row) return;
+          e.preventDefault();
+          const r = row.getBoundingClientRect();
+          if (e.clientY > r.top + r.height / 2) row.after(dragged);
+          else row.before(dragged);
+        };
+        row.ondrop = (e) => e.preventDefault();
+        row.ondragend = () => {
+          row.classList.remove("is-drag");
+          dragged = null;
+          saveOrder();
+        };
+        row.onkeydown = (e) => {
+          if (!e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+          e.preventDefault();
+          const sib = e.key === "ArrowUp" ? row.previousElementSibling : row.nextElementSibling;
+          if (!sib) return;
+          e.key === "ArrowUp" ? sib.before(row) : sib.after(row);
+          (e.target as HTMLElement).focus();
+          saveOrder();
+        };
+      });
       setCurrent(current);
       paintQueue();
     } catch (err) {
@@ -1349,6 +3014,12 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
   q("[data-new]").onclick = () => select(null);
   q("[data-refresh]").onclick = refresh;
   q("[data-dclear]").onclick = () => (q("[data-dlog]").innerHTML = "");
+  q("[data-dmounts]").onclick = async () => {
+    const r = await remote(ctx, scripts.mountList).catch((e) => ({ code: 1, out: String(e) }));
+    if (r.code) return ctx.log("err", `cannot list mounts: ${r.out.trim()}`);
+    ctx.log("step", "mounts (target  source)");
+    r.out.trim().split("\n").forEach((l) => ctx.log("info", l));
+  };
   // Full screen log: the panel covers the whole window; Esc or the button puts it back.
   const dpanel = q("[data-dpanel]"), dfull = q("[data-dfull]");
   const setFull = (on: boolean) => {
@@ -1358,7 +3029,7 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
     dpanel.classList.toggle("z-50", on);
     dpanel.classList.toggle("h-60", !on);
     dpanel.classList.toggle("border-t", !on);
-    dfull.innerHTML = on ? `${icon("minimize", "h-3 w-3")} ย่อ` : `${icon("maximize", "h-3 w-3")} Full`;
+    dfull.innerHTML = on ? `${icon("minimize", "h-3 w-3")} Exit` : `${icon("maximize", "h-3 w-3")} Full`;
     if (atEnd) log.scrollTop = log.scrollHeight; // stay following the newest lines
   };
   setFull(false);
@@ -1394,9 +3065,10 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
   // ----- Apply: the open one, or the picked ones as a queue. One at a time per machine. -----
   let busy = false;
   let names: string[] = []; // deployments in the list
+  let running = new Set<string>(); // deployments whose run is still going on the machine
   let picked: string[] = []; // queue order = the order they were picked
   const qstate = new Map<string, "wait" | "run" | "ok" | "fail" | "skip">();
-  const QTEXT = { wait: "รอคิว", run: "กำลัง deploy…", ok: "สำเร็จ (คิวนี้)", fail: "ล้มเหลว (คิวนี้)", skip: "ไม่ได้รัน" };
+  const QTEXT = { wait: "waiting", run: "deploying…", ok: "ok (this queue)", fail: "failed (this queue)", skip: "not run" };
   const setBusy = (on: boolean) => {
     busy = on;
     q<HTMLButtonElement>("[data-apply]").disabled = on;
@@ -1425,8 +3097,8 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
     });
     q("[data-list]").classList.toggle("has-picks", picked.length > 0);
     q("[data-qbar]").classList.toggle("hidden", !picked.length);
-    q("[data-qcount]").textContent = `เลือก ${picked.length} ตัว`;
-    q("[data-qlabel]").textContent = busy ? "กำลังรันคิว…" : `Apply ${picked.length} ตัวตามลำดับ`;
+    q("[data-qcount]").textContent = `${picked.length} selected`;
+    q("[data-qlabel]").textContent = busy ? "Running queue…" : `Apply ${picked.length} in order`;
     q<HTMLButtonElement>("[data-qapply]").disabled = busy || !picked.length;
     q<HTMLSelectElement>("[data-qfail]").disabled = busy;
   }
@@ -1445,6 +3117,24 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
     qstate.clear();
     paintQueue();
   };
+
+  /** Save without deploying; only metadata.name has to be valid, the rest may be unfinished. */
+  const saveDraft = async () => {
+    if (busy) return;
+    if (shYaml !== null) showYaml();
+    const text = ed.get(), name = draftName(text);
+    if (!name) return ctx.log("err", "cannot save: YAML must parse and metadata.name must be set (lowercase letters, digits, '-')");
+    const r = await remote(ctx, scripts.save(name, text)).catch((e) => ({ out: String(e), code: 1 }));
+    if (r.code) return ctx.log("err", `[${name}] cannot save manifest: ${r.out.trim()}`);
+    const done = validate();
+    ctx.log(done ? "ok" : "warn", `[${name}] saved${done ? "" : " (unfinished, fix before Apply)"}`);
+    setCurrent(name);
+    refresh();
+  };
+  q("[data-dsave]").onclick = saveDraft;
+  root.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") (e.preventDefault(), saveDraft());
+  });
 
   q("[data-apply]").onclick = async () => {
     if (busy) return;
@@ -1470,9 +3160,9 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
     qstate.clear();
     queue.forEach((n) => qstate.set(n, "wait"));
     setBusy(true);
-    ctx.log("info", `queue: ${queue.join(" → ")}  (ถ้าพัง: ${stopOnFail ? "หยุดคิว" : "ข้ามไปตัวถัดไป"})`);
+    ctx.log("info", `queue: ${queue.join(" → ")}  (on failure: ${stopOnFail ? "stop" : "skip to next"})`);
     const ready: Prepared[] = [];
-    let ok = 0, failed = 0;
+    let ok = 0, failed = 0, lost = false;
     try {
       for (const [k, name] of queue.entries()) {
         // the open one: what's in the editor (saved first, like Apply); the others: as saved on the machine
@@ -1483,28 +3173,36 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
         else qstate.set(name, "skip");
         paintQueue();
       }
-      for (const [k, p] of ready.entries()) {
-        const name = p.m.name;
+      // The whole queue starts on the machine now, each one waiting for the one before, so it carries on
+      // if this connection drops. Then we just watch them in order.
+      const launched: string[] = [];
+      for (const p of ready) {
+        if (await launchDeploy(ctx, p, launched[launched.length - 1], stopOnFail)) launched.push(p.m.name);
+        else {
+          qstate.set(p.m.name, "fail");
+          failed++;
+          if (stopOnFail) break;
+        }
+      }
+      for (const name of launched) {
         qstate.set(name, "run");
         paintQueue();
         const here = name === current;
         if (here) showFlow(true);
-        const good = await runDeploy(ctx, p, here ? flow : undefined);
-        qstate.set(name, good ? "ok" : "fail");
-        if (good) ok++;
-        else failed++;
+        const code = await followDeploy(ctx, name, here ? flow : undefined);
+        if (code === null) { lost = true; break; } // connection lost: the rest keeps going on the machine
+        qstate.set(name, code === 0 ? "ok" : code === QUEUE_SKIPPED ? "skip" : "fail");
+        if (code === 0) ok++;
+        else if (code !== QUEUE_SKIPPED) failed++;
         paintQueue();
-        if (!good && stopOnFail) {
-          ready.slice(k + 1).forEach((r) => qstate.set(r.m.name, "skip"));
-          break;
-        }
       }
     } catch (e) {
       ctx.log("err", `queue: ${e}`);
     } finally {
       const notRun = queue.length - ok - failed;
-      ctx.log(failed ? "err" : "ok", `queue done: ${ok} สำเร็จ, ${failed} ล้มเหลว${notRun ? `, ${notRun} ไม่ได้รัน` : ""}`);
-      queue.forEach((n) => qstate.get(n) === "wait" && qstate.set(n, "skip"));
+      if (lost) ctx.log("warn", "queue: still running on the machine; reconnect and open a deployment to watch it");
+      else ctx.log(failed ? "err" : "ok", `queue done: ${ok} ok, ${failed} failed${notRun ? `, ${notRun} not run` : ""}`);
+      if (!lost) queue.forEach((n) => qstate.get(n) === "wait" && qstate.set(n, "skip"));
       setBusy(false);
       await refresh(); // fresh states from the machine; the queue result stays on the rows until the picks change
     }
@@ -1514,7 +3212,7 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
     const b = q("[data-del]");
     if (!b.dataset.armed) {
       b.dataset.armed = "1";
-      q("[data-deltext]").textContent = "กดอีกครั้งเพื่อยืนยันลบ";
+      q("[data-deltext]").textContent = "Click again to confirm delete";
       return;
     }
     closeMore();
@@ -1600,7 +3298,7 @@ async function prepareDeploy(ctx: DeployCtx, text: string, save: boolean, label 
   const tag = `[${m.name}]`;
   try {
     if (save) {
-      const saved = await remote(ctx, scripts.save(m, text));
+      const saved = await remote(ctx, scripts.save(m.name, text));
       if (saved.code) return (ctx.log("err", `${tag} cannot save manifest: ${saved.out.trim()}`), null);
       ctx.log("info", `${tag} manifest saved`);
     }
@@ -1626,8 +3324,15 @@ async function prepareDeploy(ctx: DeployCtx, text: string, save: boolean, label 
   }
 }
 
-/** Apply, part 2: compile to bash -> run (streamed). true = deployed. */
-async function runDeploy(ctx: DeployCtx, { m, choice }: Prepared, flow?: FlowSink): Promise<boolean> {
+/** Apply, part 2: start on the machine, then watch it. true = deployed. */
+async function runDeploy(ctx: DeployCtx, p: Prepared, flow?: FlowSink): Promise<boolean> {
+  if (!(await launchDeploy(ctx, p))) return (flow?.end(false), false);
+  return (await followDeploy(ctx, p.m.name, flow)) === 0;
+}
+
+/** Compiles and starts a deploy on the machine, detached from this connection (`after`: queued behind
+ *  that deployment's run). true = started. */
+async function launchDeploy(ctx: DeployCtx, { m, choice }: Prepared, after?: string, stopOnFail = true): Promise<boolean> {
   const tag = `[${m.name}]`;
   try {
     let sudoPassword: string | undefined;
@@ -1637,31 +3342,48 @@ async function runDeploy(ctx: DeployCtx, { m, choice }: Prepared, flow?: FlowSin
     }
     const script = compile(m, { ...choice, sudoPassword });
 
-    ctx.log("info", `${tag} deploying ${choice.tag}…`);
-    const decoder = new TextDecoder();
-    let partial = "";
-    const emit = (line: string) => {
-      if (line.startsWith("==> ")) flow?.step(line.slice(4));
-      ctx.log(line.startsWith("==> ") ? "step" : line.startsWith("!! ") ? "err" : line.startsWith(LOG_MARK) ? "note" : "info", line);
-    };
-    const un = await listen<number[]>(`exec-data-${ctx.sid}`, (e) => {
-      const lines = (partial + decoder.decode(new Uint8Array(e.payload), { stream: true })).split(/\r?\n/);
-      partial = lines.pop()!;
-      lines.filter((l) => l.trim()).forEach(emit);
-    });
-    try {
-      const r = await remote(ctx, SHELL, script, true);
-      if (partial.trim()) emit(partial);
-      flow?.end(!r.code);
-      ctx.log(r.code ? "err" : "ok", r.code ? `${tag} deploy failed (exit ${r.code})` : `${tag} deployed ${choice.tag}`);
-      return !r.code;
-    } finally {
-      un();
-    }
+    ctx.log("info", `${tag} ${after ? `queued after ${after}` : "deploying"} ${choice.tag}…`);
+    // runs on the machine on its own: a dropped connection doesn't stop it, and followDeploy can re-attach
+    const r = await remote(ctx, scripts.launch(m.name, after, stopOnFail), script);
+    if (r.code) return (ctx.log("err", `${tag} cannot start: ${r.out.trim()}`), false);
+    return true;
   } catch (e) {
-    flow?.end(false);
     ctx.log("err", `${tag} ${e}`);
     return false;
+  }
+}
+
+/** Streams a deploy's log on the machine from its first line until it ends (works for one started
+ *  earlier, e.g. before the connection dropped). Returns its exit code (0 = deployed,
+ *  QUEUE_SKIPPED = not run), or null when the connection was lost while watching. */
+async function followDeploy(ctx: DeployCtx, name: string, flow?: FlowSink): Promise<number | null> {
+  const tag = `[${name}]`;
+  const decoder = new TextDecoder();
+  let partial = "";
+  const emit = (line: string) => {
+    if (line.startsWith("==> ")) flow?.step(line.slice(4));
+    ctx.log(line.startsWith("==> ") ? "step" : line.startsWith("!! ") ? "err" : line.startsWith(LOG_MARK) ? "note" : "info", line);
+  };
+  const un = await listen<number[]>(`exec-data-${ctx.sid}`, (e) => {
+    const text = decoder.decode(new Uint8Array(e.payload), { stream: true }).split(HEARTBEAT).join("");
+    const lines = (partial + text).split(/\r?\n/);
+    partial = lines.pop()!;
+    lines.filter((l) => l.trim()).forEach(emit);
+  });
+  try {
+    // heartbeat every 10s, so 45s of silence = the link is gone
+    const r = await remote(ctx, scripts.follow(name), undefined, true, 45_000);
+    if (partial.trim()) emit(partial);
+    flow?.end(!r.code);
+    const why = r.code === FOLLOW_LOST ? "stopped without finishing (killed or the machine restarted)" : `exit ${r.code}`;
+    if (r.code === QUEUE_SKIPPED) ctx.log("warn", `${tag} not run (the one before it in the queue failed)`);
+    else ctx.log(r.code ? "err" : "ok", r.code ? `${tag} deploy failed (${why})` : `${tag} deployed`);
+    return r.code;
+  } catch (e) {
+    ctx.log("warn", `${tag} lost the connection while watching (${e}). It keeps running on the machine (and so does the rest of its queue): reconnect and open ${name} to watch it again.`);
+    return null;
+  } finally {
+    un();
   }
 }
 
@@ -1715,7 +3437,7 @@ function pickRemote(sid: number, kind: "dir" | "file", start: string): Promise<s
       });
     }
 
-    $("#pick-title").textContent = kind === "dir" ? "เลือกโฟลเดอร์" : "เลือกไฟล์";
+    $("#pick-title").textContent = kind === "dir" ? "Choose a folder" : "Choose a file";
     $("#pick-ok").classList.toggle("hidden", kind !== "dir");
     $("#pick-ok").onclick = () => done(tilde(cur));
     $("#pick-cancel").onclick = () => done(null);
@@ -1731,13 +3453,36 @@ function pickRemote(sid: number, kind: "dir" | "file", start: string): Promise<s
 /** Our own yes/no dialog (no native confirm). Resolves true on the OK button. */
 function confirmBox(title: string, text: string, ok: string) {
   const dlg = $<HTMLDialogElement>("#confirm");
+  document.querySelectorAll("#confirm-input, #confirm [data-inonly]").forEach((el) => el.classList.add("hidden"));
+  $("#confirm-icon").innerHTML = icon("x", "h-[18px] w-[18px]");
   $("#confirm-title").textContent = title;
   $("#confirm-text").textContent = text;
+  $("#confirm-text").className = "text-sm text-zinc-400";
   $("#confirm-ok").textContent = ok;
+  $<HTMLButtonElement>("#confirm-ok").disabled = false;
   dlg.returnValue = "";
   dlg.showModal();
   $("#confirm-ok").focus();
   return new Promise<boolean>((res) => dlg.addEventListener("close", () => res(dlg.returnValue === "ok"), { once: true }));
+}
+
+/** confirmBox with a text field; resolves to the trimmed value, or "" on cancel. */
+async function inputBox(title: string, where: string, ok: string, kind: "file" | "folder", placeholder: string) {
+  const inp = $<HTMLInputElement>("#confirm-input");
+  const okBtn = $<HTMLButtonElement>("#confirm-ok");
+  const done = confirmBox(title, where, ok);
+  $("#confirm-icon").innerHTML = icon(kind, "h-[18px] w-[18px]");
+  $("#confirm-text").className = "truncate rounded-md bg-zinc-950 px-2 py-1 font-mono text-xs text-zinc-500"; // path chip
+  $("#confirm-text").title = where;
+  inp.value = "";
+  inp.placeholder = placeholder;
+  document.querySelectorAll("#confirm-input, #confirm [data-inonly]").forEach((el) => el.classList.remove("hidden"));
+  okBtn.disabled = true;
+  inp.oninput = () => (okBtn.disabled = !inp.value.trim());
+  inp.focus();
+  // Enter would submit via the first button (Cancel), so close as OK ourselves
+  inp.onkeydown = (e) => e.key === "Enter" && (e.preventDefault(), inp.value.trim() && $<HTMLDialogElement>("#confirm").close("ok"));
+  return (await done) ? inp.value.trim() : "";
 }
 
 function closeTab(key: number) {

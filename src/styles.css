@@ -251,17 +251,33 @@ label.easy-bad .ez-chip { color: var(--color-red-400); border-color: #ef4444; }
 .dp-row[data-q="fail"] [data-sub] { color: var(--color-red-400); }
 .dp-row[data-q="fail"] .dp-pick { background: #ef4444; border-color: #ef4444; color: #fff; }
 .dp-row[data-q="skip"] { opacity: .55; }
-/* Deploy flow, 3D view: isometric blocks on a floor. Node state (idle | run | ok | fail | skip) drives the colours and the lift. */
+.dp-row.is-drag { opacity: .4; }
+.dp-ico { flex-shrink: 0; display: grid; place-items: center; width: 1.75rem; height: 1.75rem; margin-right: .25rem; border-radius: 8px; color: var(--color-zinc-300); transition: background .15s, opacity .15s; }
+.dp-ico:hover { background: var(--color-zinc-700); color: var(--color-zinc-100); }
+.dp-ico.is-empty { opacity: 0; }
+.dp-row:hover .dp-ico.is-empty, .dp-ico.is-empty:focus-visible { opacity: .5; }/* Deploy flow, 3D view: isometric blocks on a floor. Node state (idle | run | ok | fail | skip) drives the colours and the lift. */
 .flow[data-view="iso"] { max-width: none; }
 .flow[data-view="iso"] .flow-pane-list, .flow[data-view="list"] .flow-pane-iso { display: none; }
 .flow-views { display: inline-flex; padding: 2px; border-radius: 99px; border: 1px solid var(--color-zinc-800); }
 .flow-views button { padding: .15rem .65rem; border-radius: 99px; font-size: 11.5px; font-weight: 500; color: var(--color-zinc-500); transition: all .15s; }
 .flow-views button:hover { color: var(--color-zinc-200); }
 .flow-views button[aria-pressed="true"] { color: var(--color-zinc-100); background: var(--color-zinc-800); }
-.flow-pane-iso { padding: 0 1.25rem 1.5rem; }
+.flow-pane-iso { position: relative; padding: 0 1.25rem 1.5rem; }
+.iso-panel { position: absolute; top: .5rem; right: 1.25rem; z-index: 5; width: min(26rem, 70%); display: flex; flex-direction: column; align-items: flex-end; gap: .35rem; pointer-events: none; }
+.iso-panel > * { pointer-events: auto; }
+.iso-panel .flow-fs { font-size: 11.5px; background: var(--color-zinc-900); }
+.iso-panel[data-open="false"] .iso-detail { display: none; }
+.iso-panel[data-open="true"] .iso-panel-arrow { display: inline-block; transform: rotate(180deg); }
+.iso-panel .iso-detail { margin: 0; width: 100%; max-width: none; box-shadow: 0 8px 24px rgb(0 0 0 / .25); }
+.flow-fs { padding: .1rem .5rem; border-radius: 99px; font-size: 14px; color: var(--color-zinc-500); border: 1px solid var(--color-zinc-800); }
+.flow-fs:hover { color: var(--color-zinc-100); }
+.flow[data-view="list"] .flow-fs { display: none; }
+.flow:fullscreen { display: flex; flex-direction: column; background: var(--color-zinc-950); }
+.flow:fullscreen .flow-pane-iso { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.flow:fullscreen .iso-wrap { flex: 1; min-height: 0; display: flex; }
+.flow:fullscreen .iso { margin: auto; max-height: 100%; }
 .iso-wrap { overflow: auto; padding: .25rem 0 .5rem; }
 .iso { display: block; margin: 0 auto; max-width: 100%; height: auto; overflow: visible; }
-.iso-plate { fill: color-mix(in oklab, var(--color-zinc-900) 70%, transparent); stroke: var(--color-zinc-800); stroke-width: 1; }
 .iso-floor circle { fill: var(--color-zinc-700); }
 .iso-pipe { fill: none; stroke: var(--color-zinc-800); stroke-width: 8; stroke-linecap: round; stroke-linejoin: round; }
 .iso-flowline { fill: none; stroke: var(--color-zinc-700); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 2 7; transition: stroke .3s; }
@@ -318,3 +334,26 @@ label.easy-bad .ez-chip { color: var(--color-red-400); border-color: #ef4444; }
 @keyframes iso-glow { 50% { fill: rgb(245 158 11 / .12); } }
 @keyframes iso-shake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
 @keyframes iso-dash { to { stroke-dashoffset: -16; } }
+
+/* App header art: always moving. SMIL inside the art (flame, cursor, gear, clock, flow) plays too; these add body motion. */
+.app-live { display: inline-flex; animation: art-float 3s ease-in-out infinite; }
+.app-live.art-calendar svg { transform-origin: 50% 10%; animation: art-swing 2.4s ease-in-out infinite; }
+.app-live.art-folder svg { transform-origin: 20% 90%; animation: art-wiggle 2s ease-in-out infinite; }
+.app-live.art-rocket svg { animation: art-rumble .25s linear infinite; }
+.app-live.art-notepad svg { transform-origin: 50% 90%; animation: art-wiggle 2s ease-in-out infinite; }
+@keyframes art-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+@keyframes art-swing { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
+@keyframes art-wiggle { 0%, 70%, 100% { transform: rotate(0); } 80% { transform: rotate(-6deg); } 90% { transform: rotate(4deg); } }
+@keyframes art-rumble { 0%, 100% { transform: translate(0, 0); } 25% { transform: translate(.4px, -.4px); } 75% { transform: translate(-.4px, .4px); } }
+@media (prefers-reduced-motion: reduce) { .app-live, .app-live svg { animation: none !important; } }
+
+/* Calendar notes: the manual's markdown look, tighter. */
+.cal-md { font-size: 13.5px; line-height: 1.55; }
+.cal-md > :first-child { margin-top: 0; }
+.cal-md > :last-child { margin-bottom: 0; }
+.cal-md h1, .cal-md h2, .cal-md h3 { font-size: 1rem; margin: .4rem 0 .2rem; padding: 0; border: 0; }
+.cal-md p, .cal-md ul, .cal-md ol, .cal-md pre { margin: .25rem 0; }
+.cal-md ul:has(input) { list-style: none; padding-left: .2rem; }
+.cal-md a { color: var(--color-amber-400); text-decoration: underline; }
+.cal-md input[type=checkbox] { accent-color: var(--color-amber-500); cursor: pointer; margin-right: .3rem; vertical-align: -1px; }
+.cal-md li:has(> input:checked) { text-decoration: line-through; opacity: .55; }

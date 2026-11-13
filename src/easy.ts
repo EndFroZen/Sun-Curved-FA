@@ -180,7 +180,7 @@ export function wrapInIf(doc: Doc, i: number, list: Path, j: number): boolean {
   const cmd = get(doc, [...list, j, "run"]).trim();
   if (!cmd) return false;
   const first = cmd.split("\n")[0];
-  doc.setIn([...list, j], doc.createNode({ if: { run: cmd, then: [{ log: `${first} ผ่าน` }], else: [{ fail: `${first} ไม่ผ่าน` }] } }));
+  doc.setIn([...list, j], doc.createNode({ if: { run: cmd, then: [{ log: `${first} passed` }], else: [{ fail: `${first} failed` }] } }));
   return true;
 }
 
@@ -211,6 +211,8 @@ export type EasyOptions = {
   envNames(file: string): Promise<string[]>;
   /** pm2 process names on the machine, or null when pm2 isn't installed. */
   pm2Apps(envFrom?: string): Promise<string[] | null>;
+  /** Folders mounted under each target path (relative to it), by target index. */
+  mounts(paths: string[]): Promise<string[][]>;
   icon(name: IconName, cls?: string): string;
 };
 
@@ -228,6 +230,8 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
   let focusStep: string | null = null; // "target:step" to focus after the next render
   let pm2: string[] | null | undefined; // process names; null = pm2 not installed; undefined = unknown
   let pm2Asked: string | null = null; // env file the current answer is for
+  let mnt: string[][] = []; // mounted folders per target
+  let mntAsked: string | null = null; // target paths the current answer is for
   let verMode: "tag" | "fixed" | "branch" | null = null; // chosen Version chip while its box is still empty
   const uid = `easy${++uidSeq}`;
   const envCache = new Map<string, string[]>();
@@ -237,7 +241,7 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
   const P = (p: Path) => `data-p="${esc(JSON.stringify(p))}" data-k="${esc(keyOf(p))}"`;
   const input = (p: Path, ph = "", extra = "") => `<input ${P(p)} value="${esc(g(p))}" placeholder="${esc(ph)}" spellcheck="false" class="${INPUT}" ${extra} />`;
   const pickBtn = (p: Path, kind: "dir" | "file", i = -1) =>
-    `<button type="button" data-act="pick" data-for="${esc(JSON.stringify(p))}" data-kind="${kind}" data-i="${i}" title="${kind === "dir" ? "เลือกโฟลเดอร์" : "เลือกไฟล์"}บนเครื่อง" class="${BTN} text-amber-400">${o.icon("folder")}</button>`;
+    `<button type="button" data-act="pick" data-for="${esc(JSON.stringify(p))}" data-kind="${kind}" data-i="${i}" title="${kind === "dir" ? "Choose a folder" : "Choose a file"} on the machine" class="${BTN} text-amber-400">${o.icon("folder")}</button>`;
   const radio = (name: string, attr: string, value: string, checked: boolean, label: string) =>
     `<label class="cursor-pointer"><input type="radio" name="${name}" ${attr} value="${value}" ${checked ? "checked" : ""} class="ez-opt sr-only" /><span class="ez-chip">${label}</span></label>`;
   const toggle = (attr: string, checked: boolean, label: string, k = "") =>
@@ -271,10 +275,10 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
     if (kind === "checkout") return [];
     const out: { label: string; tone?: "then" | "else"; run: (d: Doc) => boolean }[] = [];
     if (kind === "run" && String(raw.run ?? "").trim())
-      out.push({ label: "ใช้คำสั่งนี้เป็นเงื่อนไข if", run: (x) => wrapInIf(x, i, list, k) });
+      out.push({ label: "Use this command as an if condition", run: (x) => wrapInIf(x, i, list, k) });
     const me = keyOf([...list, k]);
     const short = (c: unknown) => {
-      const t = String(c ?? "").trim().split("\n")[0] || "(ยังไม่ใส่เงื่อนไข)";
+      const t = String(c ?? "").trim().split("\n")[0] || "(no condition yet)";
       return t.length > 32 ? t.slice(0, 31) + "…" : t;
     };
     const walk = (lp: Path, items: unknown[]) =>
@@ -286,7 +290,7 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
         for (const b of ["then", "else"] as const) {
           const bp = [...ip, "if", b];
           if (keyOf(bp) !== keyOf(list))
-            out.push({ label: `${b === "then" ? "ถ้าผ่าน" : "ถ้าไม่ผ่าน"} · if ${short(x.if?.run)}`, tone: b, run: (y) => moveStep(y, i, list, k, bp) });
+            out.push({ label: `${b === "then" ? "if pass" : "if fail"} · if ${short(x.if?.run)}`, tone: b, run: (y) => moveStep(y, i, list, k, bp) });
           walk(bp, Array.isArray(x.if?.[b]) ? x.if[b] : []);
         }
       });
@@ -294,7 +298,7 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
     if (list[list.length - 1] === "then" || list[list.length - 1] === "else") {
       const parent = list.slice(0, -3);
       const at = (list[list.length - 3] as number) + 1;
-      out.push({ label: "ย้ายออกจาก if (ไปต่อท้าย if)", run: (y) => moveStep(y, i, list, k, parent, at) });
+      out.push({ label: "Move out of the if (after it)", run: (y) => moveStep(y, i, list, k, parent, at) });
     }
     return out;
   }
@@ -311,7 +315,7 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
     m.dataset.menu = "";
     m.className = "fixed z-50 min-w-56 rounded-xl border border-zinc-700 bg-zinc-900/95 p-1 text-sm text-zinc-100 shadow-2xl shadow-black/50 backdrop-blur";
     m.innerHTML =
-      `<p class="px-3 pt-1 pb-1.5 text-[11px] text-zinc-500">ย้ายขั้นตอนนี้ไป…</p>` +
+      `<p class="px-3 pt-1 pb-1.5 text-[11px] text-zinc-500">Move this step to…</p>` +
       items
         .map((x, n) => `<button type="button" data-act="menu-pick" data-m="${n}" class="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left hover:bg-amber-500 hover:text-black ${x.tone ? `ez-br-${x.tone}` : ""}">${esc(x.label)}</button>`)
         .join("");
@@ -332,7 +336,7 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
       `<button type="button" data-act="step-add" data-kind="${kind}" data-i="${i}" ${l} class="${ADD}">${o.icon("plus", "h-3.5 w-3.5")} ${label}</button>`;
     const checkout = nested || items.some((s) => stepKind(s) === "checkout") ? "" : add("checkout", g(["spec", "source", "branch"]) ? "git pull" : "checkout");
     return node(`<span class="flex flex-wrap items-center">
-      ${add("run", "คำสั่ง")}${add("script", "สคริปต์ .sh")}${add("unmount", "unmount")}${add("mount", "mount")}${add("pm2", "pm2")}${add("log", "log")}${add("if", "if")}${add("fail", "หยุด")}
+      ${add("run", "command")}${add("script", "script .sh")}${add("unmount", "unmount")}${add("mount", "mount")}${add("pm2", "pm2")}${add("log", "log")}${add("if", "if")}${add("fail", "stop")}
       ${checkout}</span>`);
   }
 
@@ -347,7 +351,7 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
     const kind = stepKind(s);
     const L = esc(JSON.stringify(list));
     const badge = (label: string, cls = "") =>
-      `<span class="ez-kind ${cls}" draggable="true" data-drag="${k}" title="ลากเพื่อเรียงลำดับ">${label}</span>`;
+      `<span class="ez-kind ${cls}" draggable="true" data-drag="${k}" title="Drag to reorder">${label}</span>`;
     let kids: string[] = [];
     let body: string;
     if (kind === "checkout") {
@@ -355,19 +359,19 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
       const dr = `data-r="${esc(JSON.stringify([...T, i, "dirty"]))}"`;
       const branch = g(["spec", "source", "branch"]);
       body = `${badge(branch ? "git pull" : "checkout", "ez-kind-git")}
-        <span class="text-xs text-zinc-500">${branch ? esc(branch) : "tag ที่เลือก"} · ไฟล์แก้ค้าง</span>
-        ${radio(`${uid}-dirty-${i}`, dr, "ask", dirty === "ask", "ถามก่อน")}
-        ${radio(`${uid}-dirty-${i}`, dr, "discard", dirty === "discard", "ทิ้งเลย")}
-        ${radio(`${uid}-dirty-${i}`, dr, "fail", dirty === "fail", "หยุด")}`;
+        <span class="text-xs text-zinc-500">${branch ? esc(branch) : "chosen tag"} · uncommitted changes</span>
+        ${radio(`${uid}-dirty-${i}`, dr, "ask", dirty === "ask", "ask first")}
+        ${radio(`${uid}-dirty-${i}`, dr, "discard", dirty === "discard", "discard")}
+        ${radio(`${uid}-dirty-${i}`, dr, "fail", dirty === "fail", "stop")}`;
     } else if (kind === "run") {
       const cmd = String(s.run ?? "");
       const script = isScript(cmd);
       body = `${badge(o.icon(script ? "file" : "terminal", "h-3.5 w-3.5"), script ? "ez-kind-file" : "")}
-        <textarea ${P([...p, "run"])} data-ti="${i}" rows="1" placeholder="คำสั่ง bash เช่น npm ci" spellcheck="false" class="${INPUT} ez-area">${esc(cmd)}</textarea>`;
+        <textarea ${P([...p, "run"])} data-ti="${i}" rows="1" placeholder="bash command, e.g. npm ci" spellcheck="false" class="${INPUT} ez-area">${esc(cmd)}</textarea>`;
     } else if (kind === "log") {
-      body = `${badge("log", "ez-kind-log")}${sInput(i, [...p, "log"], String(s.log ?? ""), "ข้อความที่จะขึ้นใน log เช่น เริ่ม build $TAG", 'style="min-width:16rem"')}`;
+      body = `${badge("log", "ez-kind-log")}${sInput(i, [...p, "log"], String(s.log ?? ""), "text to show in the log, e.g. building $TAG", 'style="min-width:16rem"')}`;
     } else if (kind === "unmount") {
-      body = `${badge("unmount")}${sInput(i, [...p, "unmount"], String(s.unmount ?? ""), "public/cache")}`;
+      body = `${badge("unmount")}${sInput(i, [...p, "unmount"], String(s.unmount ?? ""), "public/cache", `list="${uid}-mnt-${i}"`)}`;
     } else if (kind === "mount") {
       body = `${badge("mount")}
         ${sInput(i, [...p, "mount", "from"], String(s.mount?.from ?? ""), "/data/source")}${pickBtn([...p, "mount", "from"], "dir", i)}
@@ -378,12 +382,12 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
       const app = typeof v === "string" ? v : String(v?.app ?? "");
       const d = (typeof v === "object" && v?.do) || "status";
       const dr = `data-r="${esc(JSON.stringify([...p, "pm2", "do"]))}" data-ti="${i}"`;
-      body = `${badge("pm2")}${sInput(i, [...p, "pm2", "app"], app, "ชื่อ process", `list="${uid}-pm2" data-pm2`)}
+      body = `${badge("pm2")}${sInput(i, [...p, "pm2", "app"], app, "process name", `list="${uid}-pm2" data-pm2`)}
         ${PM2_DO.map((x) => radio(`${uid}-pm2-${i}-${k}`, dr, x, d === x, x)).join("")}
         <span data-pm2warn class="hidden text-xs text-red-400"></span>`;
     } else if (kind === "fail") {
-      body = `${badge("หยุด", "ez-kind-fail")}${sInput(i, [...p, "fail"], typeof s === "string" ? "" : String(s.fail ?? ""), "ข้อความ เช่น build ไม่ผ่าน", 'style="min-width:16rem"')}
-        <span class="text-xs text-zinc-500">deploy ล้มเหลวตรงนี้</span>`;
+      body = `${badge("stop", "ez-kind-fail")}${sInput(i, [...p, "fail"], typeof s === "string" ? "" : String(s.fail ?? ""), "message, e.g. build failed", 'style="min-width:16rem"')}
+        <span class="text-xs text-zinc-500">the deploy fails here</span>`;
     } else if (kind === "if") {
       const v = s.if && typeof s.if === "object" ? s.if : {};
       const branch = (b: "then" | "else", label: string, tip: string) => {
@@ -391,20 +395,20 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
         return node(`<span class="ez-br ez-br-${b}" title="${esc(tip)}">${label}</span>`, stepRows(i, [...p, "if", b], items, true));
       };
       body = `${badge("if", "ez-kind-if")}
-        <textarea ${P([...p, "if", "run"])} data-ti="${i}" rows="1" placeholder="เงื่อนไข: คำสั่ง เช่น npm run build (exit 0 = ผ่าน)" spellcheck="false" class="${INPUT} ez-area">${esc(String(v.run ?? ""))}</textarea>`;
+        <textarea ${P([...p, "if", "run"])} data-ti="${i}" rows="1" placeholder="condition: a command, e.g. npm run build (exit 0 = pass)" spellcheck="false" class="${INPUT} ez-area">${esc(String(v.run ?? ""))}</textarea>`;
       kids = [
-        branch("then", "ถ้าผ่าน", "คำสั่งเงื่อนไขจบด้วย exit 0"),
-        branch("else", "ถ้าไม่ผ่าน", "คำสั่งเงื่อนไขพัง (exit ไม่ใช่ 0) แทนที่ deploy จะหยุด จะทำขั้นตอนพวกนี้แล้วไปต่อ"),
+        branch("then", "if pass", "the condition command exits 0"),
+        branch("else", "if fail", "the condition command fails (exit not 0); instead of stopping the deploy, these steps run and it carries on"),
       ];
     } else {
-      body = `${badge("?")}<span class="font-mono text-xs text-zinc-500" title="แก้ขั้นตอนนี้ในโหมด YAML">${esc(JSON.stringify(s))}</span>`;
+      body = `${badge("?")}<span class="font-mono text-xs text-zinc-500" title="Edit this step in YAML mode">${esc(JSON.stringify(s))}</span>`;
     }
     const sAct = (a: string, ic: IconName, title: string, disabled = false) =>
       `<button type="button" data-act="${a}" data-i="${i}" data-j="${k}" data-l="${L}" title="${title}" ${disabled ? "disabled" : ""} class="${BTN}">${o.icon(ic, "h-3.5 w-3.5")}</button>`;
     const movable = moveChoices(i, list, k).length > 0;
     const tools = acts(
-      (movable ? sAct("step-move", "corner", "ย้ายเข้า / ออกจาก if") : "") +
-        sAct("step-up", "arrowUp", "เลื่อนขึ้น", k === 0) + sAct("step-down", "arrowDown", "เลื่อนลง", k === n - 1) + sAct("step-del", "x", "ลบขั้นตอนนี้"),
+      (movable ? sAct("step-move", "corner", "Move into / out of an if") : "") +
+        sAct("step-up", "arrowUp", "Move up", k === 0) + sAct("step-down", "arrowDown", "Move down", k === n - 1) + sAct("step-del", "x", "Delete this step"),
     );
     return node(`<span class="flex min-w-0 flex-1 flex-wrap items-center gap-1" data-k="${esc(keyOf(p))}">${body}</span>${tools}`, kids, `data-step="${esc(keyOf(p))}" data-l="${L}" data-j="${k}" data-ti="${i}"`);
   }
@@ -415,12 +419,12 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
 
     const head = `
       <span class="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-amber-500/15 text-xs font-semibold text-amber-400">${i + 1}</span>
-      <input ${P([...t, "name"])} value="${esc(g([...t, "name"]))}" placeholder="ชื่อ target" spellcheck="false"
+      <input ${P([...t, "name"])} value="${esc(g([...t, "name"]))}" placeholder="target name" spellcheck="false"
         class="ez-in font-semibold" />
-      ${acts(act("target-up", "arrowUp", "เลื่อนขึ้น", i, -1, i === 0) + act("target-down", "arrowDown", "เลื่อนลง", i, -1, i === n - 1) + act("target-del", "trash", "ลบ target นี้", i))}`;
+      ${acts(act("target-up", "arrowUp", "Move up", i, -1, i === 0) + act("target-down", "arrowDown", "Move down", i, -1, i === n - 1) + act("target-del", "trash", "Delete this target", i))}`;
     return node(head, [
-      leaf("Path", input([...t, "path"], "~/Projects/my-app") + pickBtn([...t, "path"], "dir", i), "โฟลเดอร์ git ที่ clone ไว้แล้วบนเครื่อง"),
-      section("ขั้นตอน", rows, "รันจากบนลงล่าง ลากป้ายด้านหน้าเพื่อเรียงลำดับ ขั้นไหนพัง = หยุด"),
+      leaf("Path", input([...t, "path"], "~/Projects/my-app") + pickBtn([...t, "path"], "dir", i), "a git folder already cloned on the machine"),
+      section("Steps", rows, "Run top to bottom. Drag the label on the left to reorder. A failing step stops the deploy"),
     ]);
   }
 
@@ -433,15 +437,15 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
     const n = count(doc, T);
     const root = `
       <span class="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-amber-500 text-black">${o.icon("folder", "h-3.5 w-3.5")}</span>
-      <input ${P(["metadata", "name"])} value="${esc(g(["metadata", "name"]))}" placeholder="ชื่อ deploy เช่น my-app" spellcheck="false" title="a-z, 0-9 และ - เท่านั้น ใช้เป็นชื่อไฟล์บนเครื่อง"
+      <input ${P(["metadata", "name"])} value="${esc(g(["metadata", "name"]))}" placeholder="deploy name, e.g. my-app" spellcheck="false" title="a-z, 0-9 and - only; used as the file name on the machine"
         class="ez-in text-base! font-semibold" />`;
     const kids = [
-      leaf("ไฟล์ env", input(["spec", "envFrom"], "~/EndFroZen/CommandCenter/app.env (ไม่บังคับ)") + pickBtn(["spec", "envFrom"], "file"), "โหลดก่อนทุกขั้นตอน ความลับอยู่ในไฟล์นี้บนเครื่องเท่านั้น"),
-      leaf("sudo", toggle("data-sudo", g(["spec", "sudo"]) === "login-password", "ใช้รหัส login", "spec.sudo"), "เปิดเมื่อมี mount: ใช้รหัส login ที่บันทึกไว้เป็นรหัส sudo"),
+      leaf("Env file", input(["spec", "envFrom"], "~/EndFroZen/CommandCenter/app.env (optional)") + pickBtn(["spec", "envFrom"], "file"), "Loaded before every step. Secrets stay in this file on the machine only"),
+      leaf("sudo", toggle("data-sudo", g(["spec", "sudo"]) === "login-password", "use login password", "spec.sudo"), "Turn on for mount: uses the saved login password as the sudo password"),
       section("Source", [
         leaf("Repo", input(["spec", "source", "repo"], "github.com/owner/repo")),
-        leaf("Private", toggle("data-private", priv, "ใช้ user/token จากไฟล์ env"),
-          "ใส่ชื่อตัวแปรในไฟล์ env ไม่ใช่ค่าจริง",
+        leaf("Private", toggle("data-private", priv, "use user/token from the env file"),
+          "Enter variable names from the env file, not the actual values",
           priv
             ? [
                 leaf("user", input(["spec", "source", "auth", "user"], "GITHUB_USERNAME", `list="${uid}-env"`)),
@@ -449,12 +453,12 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
               ]
             : []),
         leaf("Version", `<div class="flex flex-wrap items-center gap-1">
-          ${radio(`${uid}-ver`, "data-ver", "tag", vm === "tag", "เลือก tag ตอน deploy")}
-          ${radio(`${uid}-ver`, "data-ver", "fixed", vm === "fixed", "ล็อก tag")}
+          ${radio(`${uid}-ver`, "data-ver", "tag", vm === "tag", "pick tag at deploy")}
+          ${radio(`${uid}-ver`, "data-ver", "fixed", vm === "fixed", "pinned tag")}
           ${radio(`${uid}-ver`, "data-ver", "branch", vm === "branch", "git pull branch")}
           ${vm === "fixed" ? input(["spec", "source", "version"], "v1.2.0", "data-vin") : ""}
           ${vm === "branch" ? input(["spec", "source", "branch"], "main", "data-vin") : ""}</div>`,
-          "ไม่มี tag ใช้ git pull branch: ดึง commit ล่าสุดของ branch นั้น"),
+          "No tags, use git pull on a branch: fetches that branch's latest commit"),
       ]),
       ...Array.from({ length: n }, (_, i) => targetNode(i, n)),
       node(addBtn("target-add", -1, "target")),
@@ -462,7 +466,8 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
     box.innerHTML = `
       <div class="mx-auto max-w-3xl px-6 py-5"><ul class="tree">${node(root, kids)}</ul></div>
       <datalist id="${uid}-env"></datalist>
-      <datalist id="${uid}-pm2"></datalist>`;
+      <datalist id="${uid}-pm2"></datalist>
+      ${Array.from({ length: n }, (_, i) => `<datalist id="${uid}-mnt-${i}"></datalist>`).join("")}`;
     box.scrollTop = top;
     if (focusStep) {
       box.querySelector<HTMLElement>(`[data-step="${focusStep}"] :is(input, textarea)`)?.focus();
@@ -470,6 +475,25 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
     }
     loadEnv();
     loadPm2();
+    loadMounts(n);
+  }
+
+  /** Asks the machine what is mounted under each target path, again when a path changes. */
+  function loadMounts(n: number) {
+    const paths = Array.from({ length: n }, (_, i) => g([...T, i, "path"]) || "");
+    const key = JSON.stringify(paths);
+    if (mntAsked === key) return applyMounts();
+    mntAsked = key;
+    mnt = [];
+    o.mounts(paths)
+      .then((v) => mntAsked === key && (mnt = v))
+      .catch(() => mntAsked === key && (mntAsked = null)) // try again next render
+      .finally(applyMounts);
+  }
+  function applyMounts() {
+    box.querySelectorAll<HTMLDataListElement>(`datalist[id^="${uid}-mnt-"]`).forEach((dl) => {
+      dl.innerHTML = (mnt[+dl.id.slice(`${uid}-mnt-`.length)] ?? []).map((v) => `<option value="${esc(v)}"></option>`).join("");
+    });
   }
 
   /** Asks the machine which pm2 processes exist, again whenever the env file changes (it may set PATH). */
@@ -491,7 +515,7 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
     if (dl) dl.innerHTML = (pm2 ?? []).map((v) => `<option value="${esc(v)}"></option>`).join("");
     box.querySelectorAll<HTMLButtonElement>('[data-act="step-add"][data-kind="pm2"]').forEach((b) => {
       b.disabled = none;
-      b.title = none ? "เครื่องนี้ไม่ได้ติดตั้ง pm2" : "";
+      b.title = none ? "pm2 is not installed on this machine" : "";
     });
     box.querySelectorAll<HTMLInputElement>("[data-pm2]").forEach(warnPm2);
   }
@@ -499,7 +523,7 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
     const w = inp.parentElement?.querySelector<HTMLElement>("[data-pm2warn]");
     if (!w) return;
     const app = inp.value.trim();
-    const msg = pm2 === null ? "เครื่องนี้ไม่ได้ติดตั้ง pm2" : pm2 && app && !pm2.includes(app) ? "ไม่มี process นี้ใน pm2" : "";
+    const msg = pm2 === null ? "pm2 is not installed on this machine" : pm2 && app && !pm2.includes(app) ? "no such process in pm2" : "";
     w.textContent = msg;
     w.classList.toggle("hidden", !msg);
   }
@@ -608,7 +632,7 @@ export function createEasy(box: HTMLElement, o: EasyOptions) {
             pm2: { pm2: { app: "", do: "restart" } },
             log: { log: "" },
             fail: { fail: "" },
-            if: { if: { run: "", then: [{ log: "ผ่าน" }], else: [{ fail: "ไม่ผ่าน" }] } },
+            if: { if: { run: "", then: [{ log: "passed" }], else: [{ fail: "failed" }] } },
             checkout: "checkout",
           }[kind];
         if (kind === "mount" || kind === "unmount") needSudo(d);

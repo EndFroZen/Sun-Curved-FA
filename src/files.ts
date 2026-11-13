@@ -12,8 +12,19 @@ export const listScript = (path: string) =>
 
 export const PREVIEW_BYTES = 256 * 1024;
 export const readScript = (path: string) => `head -c ${PREVIEW_BYTES} -- ${sq(path)}`;
+/** Images / SVG / PDF the webview renders itself; fetched whole as base64 (remote_exec output is lossy UTF-8). */
+export const MEDIA_MAX = 20 * 1024 * 1024;
+const MIME: Record<string, string> = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
+  bmp: "image/bmp", ico: "image/x-icon", avif: "image/avif", svg: "image/svg+xml", pdf: "application/pdf",
+};
+export const mimeFor = (name: string) => MIME[name.split(".").pop()!.toLowerCase()];
+export const mediaScript = (path: string) => `base64 -w0 -- ${sq(path)}`;
 /** Content goes in on stdin; `cat >` rewrites in place, so owner and mode are kept. */
 export const writeScript = (path: string) => `cat > ${sq(path)}`;
+/** `set -C` (noclobber) makes the redirect fail instead of emptying an existing file. */
+export const newFileScript = (path: string) => `set -C && : > ${sq(path)}`;
+export const mkdirScript = (path: string) => `mkdir -- ${sq(path)}`;
 /** Root-owned files: stdin = password line, then content. Content goes via a temp file so a sudo that
  *  doesn't prompt (NOPASSWD) can never write the password into the target; `cat >` keeps owner and mode. */
 export const sudoWriteScript = (path: string) =>

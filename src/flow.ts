@@ -190,14 +190,14 @@ function isoScene(steps: FlowStep[], repo: string, ver: string) {
       </g>`,
       `<g class="iso-node iso-text iso-k-${kind}" data-i="${i}" data-state="idle" transform="translate(${x},${y})">
         <title>${esc(s.title)}</title>${head}<text class="iso-label" x="${lx}" y="${ly}">${esc(cut(s.label))}</text>
-        <text class="iso-sub" x="${lx}" y="${ly + 15}">${KIND_NAME[kind]}${br ? ` · <tspan class="iso-br-${br}">${br === "then" ? "ผ่าน" : "ไม่ผ่าน"}</tspan>` : ""} <tspan data-time></tspan></text>
+        <text class="iso-sub" x="${lx}" y="${ly + 15}">${KIND_NAME[kind]}${br ? ` · <tspan class="iso-br-${br}">${br === "then" ? "pass" : "fail"}</tspan>` : ""} <tspan data-time></tspan></text>
       </g>`,
     ];
   };
   // back to front, so nearer blocks cover farther ones
   const order = [-1, ...steps.map((_, i) => i)].sort((a, b) => at(a).x + at(a).y - (at(b).x + at(b).y) || a - b).map(node);
   return `<svg class="iso" viewBox="${n(minX)} ${n(minY)} ${n(maxX - minX)} ${n(maxY - minY)}" width="${n(maxX - minX)}" height="${n(maxY - minY)}">
-    <polygon class="iso-plate" points="${pts(...plate)}"/><g class="iso-floor">${floor}</g>
+    <g class="iso-floor">${floor}</g>
     <g>${pipes}</g>${order.map((o) => o[0]).join("")}${order.map((o) => o[1]).join("")}</svg>`;
 }
 
@@ -214,6 +214,25 @@ export function createFlow(box: HTMLElement, log: (text: string, step: boolean) 
   let live = false; // a real deploy is lighting it up
   let follow = true; // the detail panel follows the running step (until a block is clicked)
   let view: "iso" | "list" = localStorage.getItem("flow-view") === "list" ? "list" : "iso";
+  let panelOpen = false; // the floating command panel starts collapsed
+  let zoomKey = ""; // per repo; window and fullscreen keep separate zooms
+
+  const zkey = () => `flow-zoom:${zoomKey}:${document.fullscreenElement ? "fs" : "win"}`;
+  /** Sizes the 3D scene from the saved zoom (none saved = fit). */
+  function applyZoom() {
+    const el = box.querySelector<SVGSVGElement>("svg.iso");
+    if (!el) return;
+    const z = +localStorage.getItem(zkey())!;
+    el.style.width = z ? `${el.width.baseVal.value * z}px` : "";
+    el.style.maxWidth = el.style.maxHeight = z ? "none" : "";
+  }
+  function zoomBy(f: number) {
+    const el = box.querySelector<SVGSVGElement>("svg.iso")!;
+    const cur = el.getBoundingClientRect().width / el.width.baseVal.value; // start from what is on screen
+    localStorage.setItem(zkey(), String(Math.min(4, Math.max(0.25, cur * f))));
+    applyZoom();
+  }
+  document.addEventListener("fullscreenchange", applyZoom);
 
   /** Shows step `i` (its commands) under the 3D view. */
   function detail(i: number) {
@@ -221,7 +240,7 @@ export function createFlow(box: HTMLElement, log: (text: string, step: boolean) 
     if (!el || !s) return;
     box.querySelectorAll<SVGElement>(".iso-node[data-i]").forEach((g) => g.classList.toggle("iso-sel", +g.dataset.i! === i));
     const kind = flowKind(s), cmds = s.cmds.filter((c) => !/^cd /.test(c));
-    const word: Record<State, string> = { idle: "รอ", run: "กำลังทำ…", ok: "สำเร็จ", fail: "ล้มเหลว", skip: "ข้าม" };
+    const word: Record<State, string> = { idle: "waiting", run: "running…", ok: "ok", fail: "failed", skip: "skipped" };
     el.dataset.state = st[i];
     el.innerHTML = `
       <div class="flex items-center gap-2">
@@ -229,7 +248,7 @@ export function createFlow(box: HTMLElement, log: (text: string, step: boolean) 
         <span class="min-w-0 flex-1 truncate font-mono text-[13px] text-zinc-100">${esc(s.title)}</span>
         <span class="iso-detail-state">${word[st[i]]}</span>
       </div>
-      ${cmds.length ? `<pre class="iso-cmds">${esc(cmds.join("\n"))}</pre>` : `<p class="mt-2 text-xs text-zinc-500">ไม่มีคำสั่ง</p>`}`;
+      ${cmds.length ? `<pre class="iso-cmds">${esc(cmds.join("\n"))}</pre>` : `<p class="mt-2 text-xs text-zinc-500">No commands</p>`}`;
   }
 
   const rows = () => box.querySelectorAll<HTMLElement>("[data-i]");
@@ -267,7 +286,7 @@ export function createFlow(box: HTMLElement, log: (text: string, step: boolean) 
     const status = box.querySelector<HTMLElement>("[data-status]");
     if (status) {
       status.dataset.state = at < 0 ? "idle" : state;
-      status.textContent = at < 0 ? "พร้อม" : state === "run" ? "กำลังทำ…" : state === "ok" ? "สำเร็จ" : "ล้มเหลว";
+      status.textContent = at < 0 ? "Ready" : state === "run" ? "Running…" : state === "ok" ? "Done" : "Failed";
     }
     clearInterval(timer);
     if (running) timer = window.setInterval(tick, 200);
@@ -327,7 +346,7 @@ export function createFlow(box: HTMLElement, log: (text: string, step: boolean) 
     const kind = flowKind(s);
     const cmds = s.cmds.filter((c) => !/^cd /.test(c));
     const br = s.branch[s.branch.length - 1];
-    const tag = br ? `<span class="flow-br flow-br-${br}" title="ทำเมื่อเงื่อนไข${br === "then" ? "ผ่าน" : "ไม่ผ่าน"}">${br === "then" ? "ผ่าน" : "ไม่ผ่าน"}</span>` : "";
+    const tag = br ? `<span class="flow-br flow-br-${br}" title="Runs when the condition ${br === "then" ? "passes" : "fails"}">${br === "then" ? "pass" : "fail"}</span>` : "";
     return `
       <li data-i="${i}" data-state="idle" class="flow-row" style="margin-left:${s.branch.length * 1.75}rem">
         <div class="flow-rail">
@@ -360,6 +379,7 @@ export function createFlow(box: HTMLElement, log: (text: string, step: boolean) 
       const hasIf = steps.some((s) => flowKind(s) === "if");
       const [repo, ver = ""] = head.split(" @ ");
       const short = repo.replace(/^https?:\/\//, "").replace(/\.git$/, "");
+      zoomKey = repo;
       // a heading whenever the target changes (only when there is more than one target)
       const groups = new Set(steps.filter((s) => s.group !== "done").map((s) => s.group));
       let prev = "";
@@ -374,21 +394,28 @@ export function createFlow(box: HTMLElement, log: (text: string, step: boolean) 
         <div class="flow" data-view="${view}">
           <div class="flow-head">
             <div class="flex items-center gap-3">
-              <span data-status data-state="idle" class="flow-status">พร้อม</span>
-              <span class="text-xs text-zinc-500"><span data-count>0/${steps.length}</span> ขั้นตอน · <span data-total>–</span></span>
+              <button data-sim="1" class="flow-sim" ${hasIf ? 'title="Simulate every if passing"' : ""}>${svg(ICON.play, "h-3 w-3")} Simulate${hasIf ? " · pass" : ""}</button>
+              ${hasIf ? `<button data-sim="0" class="flow-sim flow-sim-bad" title="Simulate every if failing">${svg(ICON.play, "h-3 w-3")} fail</button>` : ""}
+              <span data-status data-state="idle" class="flow-status">Ready</span>
+              <span class="text-xs text-zinc-500"><span data-count>0/${steps.length}</span> steps · <span data-total>–</span></span>
               <span class="flex-1"></span>
-              <span class="flow-views" role="group" aria-label="มุมมอง">
+              <span class="flow-views" role="group" aria-label="View">
                 <button data-view="iso" aria-pressed="${view === "iso"}">3D</button>
-                <button data-view="list" aria-pressed="${view === "list"}">รายการ</button>
+                <button data-view="list" aria-pressed="${view === "list"}">List</button>
               </span>
-              <button data-sim="1" class="flow-sim" ${hasIf ? 'title="จำลองว่าทุก if ผ่าน"' : ""}>${svg(ICON.play, "h-3 w-3")} Simulate${hasIf ? " · ผ่าน" : ""}</button>
-              ${hasIf ? `<button data-sim="0" class="flow-sim flow-sim-bad" title="จำลองว่าทุก if ไม่ผ่าน">${svg(ICON.play, "h-3 w-3")} ไม่ผ่าน</button>` : ""}
+              <button data-zoom="0.8" class="flow-fs" title="Zoom out">−</button>
+              <button data-zoom="1.25" class="flow-fs" title="Zoom in">+</button>
+              <button data-zoom="0" class="flow-fs" title="Fit">1:1</button>
+              <button data-fs class="flow-fs" title="Full screen (Esc to exit)">⛶</button>
             </div>
             <div class="flow-track"><span data-bar class="flow-bar"></span></div>
           </div>
           <div class="flow-pane-iso">
             <div class="iso-wrap">${isoScene(steps, repo, ver)}</div>
-            <div class="iso-detail" data-detail><p class="text-center text-xs text-zinc-500">คลิกบล็อกเพื่อดูคำสั่ง</p></div>
+            <div class="iso-panel" data-open="${panelOpen}">
+              <button data-panel class="flow-fs" title="Show / collapse commands">Commands <span class="iso-panel-arrow">▾</span></button>
+              <div class="iso-detail" data-detail><p class="text-center text-xs text-zinc-500">Click a block to see its commands</p></div>
+            </div>
           </div>
           <div class="flow-body flow-pane-list">
             <div class="flow-source">
@@ -400,9 +427,17 @@ export function createFlow(box: HTMLElement, log: (text: string, step: boolean) 
               ${ver ? `<span class="flow-ver">${esc(ver)}</span>` : ""}
             </div>
             <ol class="flow-list">${list}</ol>
-            <p class="mt-3 text-center text-[11px] text-zinc-500">คลิกขั้นตอนเพื่อดูคำสั่ง</p>
+            <p class="mt-3 text-center text-[11px] text-zinc-500">Click a step to see its commands</p>
           </div>
         </div>`;
+      box.querySelector<HTMLElement>("[data-fs]")!.onclick = () =>
+        document.fullscreenElement ? document.exitFullscreen() : box.querySelector(".flow")!.requestFullscreen();
+      box.querySelectorAll<HTMLElement>("[data-zoom]").forEach(
+        (b) => (b.onclick = () => (+b.dataset.zoom! ? zoomBy(+b.dataset.zoom!) : (localStorage.removeItem(zkey()), applyZoom()))),
+      );
+      applyZoom();
+      box.querySelector<HTMLElement>("[data-panel]")!.onclick = () =>
+        (box.querySelector<HTMLElement>(".iso-panel")!.dataset.open = String((panelOpen = !panelOpen)));
       box.querySelectorAll<HTMLElement>("[data-sim]").forEach((b) => (b.onclick = () => simulate(b.dataset.sim === "1")));
       box.querySelectorAll<HTMLButtonElement>("button[data-view]").forEach((b) => {
         b.onclick = () => {

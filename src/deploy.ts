@@ -92,6 +92,16 @@ const str = (v: unknown, what: string) => {
 };
 const optStr = (v: unknown, what: string) => (v === undefined || v === null ? undefined : str(String(v), what));
 
+/** metadata.name of a draft (the rest may be unfinished), or null if the YAML doesn't parse / has no valid name. */
+export function draftName(text: string): string | null {
+  try {
+    const name = parse(text)?.metadata?.name;
+    return typeof name === "string" && NAME.test(name) ? name : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Parses and validates a manifest; throws Error with a message meant for the user. */
 export function parseManifest(text: string): Manifest {
   let doc: any;
@@ -238,19 +248,66 @@ const prelude = (m: Manifest) =>
     gitFn(m),
   ].filter(Boolean).join("\n");
 
-/** Small read-only scripts used by the app. */
+/** Login shell so PATH matches an interactive session (nvm, pm2, …). */
+export const SHELL_CMD = "bash -l -s";
+/** Byte `follow` sends while a run is quiet; strip it from the output. */
+export const HEARTBEAT = "\x06";
+/** Exit code of `follow` when the run ended without writing its code. */
+export const FOLLOW_LOST = 99;
+/** Exit code of a queued run that didn't start because the one before it failed. */
+export const QUEUE_SKIPPED = 98;
+
+/** Small scripts used by the app. */
 export const scripts = {
   list: `cd "${BASE}/deployments" 2>/dev/null || exit 0
-for f in *.yaml; do [ -e "$f" ] || continue; n=\${f%.yaml}; echo "$n $(cat "../state/$n" 2>/dev/null || echo never)"; done`,
+for f in *.yaml; do [ -e "$f" ] || continue; n=\${f%.yaml}; p="../run/$n/pid"
+if [ -f "$p" ] && kill -0 "$(cat "$p")" 2>/dev/null; then echo "$n running"; else echo "$n $(cat "../state/$n" 2>/dev/null || echo never)"; fi; done`,
+  /** Starts the compiled script (on stdin) detached from this SSH connection, so a dropped link
+   *  doesn't kill it: output -> run/<name>/log, pid -> pid, exit code -> code. The script file
+   *  (it may hold the sudo password) is deleted as soon as bash has it open. Exit 3 = already running.
+   *  `after`: a queue on the machine - wait for that deployment's run to end first; with `stopOnFail`,
+   *  don't run if it failed (code ${QUEUE_SKIPPED}, which also stops the ones queued after this). */
+  launch: (name: string, after?: string, stopOnFail = true) => `d="${BASE}/run/${name}"; mkdir -p -m 700 "${BASE}/run" "$d" || exit 1
+if [ -f "$d/pid" ] && kill -0 "$(cat "$d/pid")" 2>/dev/null; then cat > /dev/null; echo "already deploying (pid $(cat "$d/pid"))"; exit 3; fi
+(umask 077 && cat > "$d/script") || exit 1
+rm -f "$d/code"
+${after ? `a="${BASE}/run/${after}"; p=$(cat "$a/pid" 2>/dev/null)` : `a=""; p=""`}
+# ponytail: waits on the previous run's pid (polled); a reused pid would only make it wait longer
+setsid nohup sh -c 'd=$1 p=$2 a=$3
+if [ -n "$p" ]; then
+  echo "waiting for \${a##*/} to finish..."
+  while kill -0 "$p" 2>/dev/null; do sleep 2; done
+  c=$(cat "$a/code" 2>/dev/null || echo ${FOLLOW_LOST})
+  if [ "$c" != 0 ] && [ ${stopOnFail ? 1 : 0} = 1 ]; then echo "!! not run: \${a##*/} did not deploy"; rm -f "$d/script"; echo ${QUEUE_SKIPPED} > "$d/code"; exit; fi
+fi
+exec < "$d/script"; rm -f "$d/script"; ${SHELL_CMD}; echo $? > "$d/code"' sh "$d" "$p" "$a" > "$d/log" 2>&1 < /dev/null &
+echo $! > "$d/pid"`,
+  /** Prints run/<name>/log from the start and follows it until the run ends, then exits with its code
+   *  (${FOLLOW_LOST} = it stopped without one: killed or rebooted). Sends a ${JSON.stringify(HEARTBEAT)} byte every 10s
+   *  so the app can tell a quiet build from a dead link. */
+  follow: (name: string) => `d="${BASE}/run/${name}"; pid=$(cat "$d/pid" 2>/dev/null)
+[ -f "$d/log" ] || { echo "no deploy log on the machine"; exit 2; }
+( while kill -0 "$pid" 2>/dev/null; do sleep 10; printf '\\006'; done ) & hb=$!
+if [ -n "$pid" ]; then tail -n +1 --pid="$pid" -f "$d/log"; else cat "$d/log"; fi
+kill $hb 2>/dev/null
+exit "$(cat "$d/code" 2>/dev/null || echo ${FOLLOW_LOST})"`,
   read: (name: string) => `cat "${BASE}/deployments/${name}.yaml"`,
-  save: (m: Manifest, text: string) =>
-    `mkdir -p "${BASE}/deployments" && echo ${b64(text)} | base64 -d > "${BASE}/deployments/${m.name}.yaml"`,
+  save: (name: string, text: string) =>
+    `mkdir -p "${BASE}/deployments" && echo ${b64(text)} | base64 -d > "${BASE}/deployments/${name}.yaml"`,
   /** "pm2 no" when pm2 isn't installed, else "pm2 yes" + `pm2 jlist`. Run with the login shell and the
    *  deployment's env file, so it sees the same PATH as a deploy. Never starts the pm2 daemon. */
   pm2Apps: (envFrom?: string) => `${TERMINAL_PATH}\n${envFrom ?`set -a; . ${dq(envFrom)} 2>/dev/null; set +a\n` : ""}command -v pm2 >/dev/null 2>&1 || { echo "pm2 no"; exit 0; }
 echo "pm2 yes"
 [ -S "\${PM2_HOME:-$HOME/.pm2}/rpc.sock" ] || { echo "[]"; exit 0; }
 pm2 jlist 2>/dev/null`,
+  /** Mount points under each target path, as "<index> <path relative to it>". Read-only, no sudo. */
+  // ponytail: paths with spaces show as \040 (as /proc/mounts writes them)
+  mounts: (paths: string[]) =>
+    paths
+      .map((p, i) => `d=$(cd ${dq(p)} 2>/dev/null && pwd -P) && awk -v d="$d/" '!seen[$2]++ && index($2, d) == 1 { print "${i} " substr($2, length(d) + 1) }' /proc/mounts`)
+      .join("\n"),
+  /** Real mounts on the machine (skips proc/sys/cgroup/tmpfs noise); bind mounts show as dev[/source dir]. */
+  mountList: `findmnt -rn -o TARGET,SOURCE -t noproc,nosysfs,nocgroup,nocgroup2,notmpfs,nodevtmpfs,nodevpts,nomqueue,nosecurityfs,nopstore,nobpf,nodebugfs,notracefs,noconfigfs,nofusectl,nohugetlbfs,noautofs,nobinfmt_misc,nonsfs,nosquashfs 2>/dev/null || cat /proc/mounts`,
   /** Variable NAMES defined in an env file (values never leave the machine). */
   envNames: (file: string) => `sed -nE 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\\2/p' ${dq(file)} 2>/dev/null | sort -u`,
   /** Writes a standalone script (compile with standalone: true) to scripts/<name>.sh, only the user can read/run it. */
@@ -258,7 +315,7 @@ pm2 jlist 2>/dev/null`,
     `mkdir -p "${BASE}/scripts" && f="${BASE}/scripts/${name}.sh" && (umask 077 && echo ${b64(sh)} | base64 -d > "$f") && chmod 700 "$f" && echo "$f"`,
   /** Deletes only Sun Curved's own files, never the projects. */
   remove: (name: string) =>
-    `rm -f "${BASE}/deployments/${name}.yaml" "${BASE}/state/${name}" "${BASE}/scripts/${name}.sh" && echo deleted`,
+    `rm -rf "${BASE}/deployments/${name}.yaml" "${BASE}/state/${name}" "${BASE}/scripts/${name}.sh" "${BASE}/run/${name}" && echo deleted`,
   /** Lists remote tags ("tag X") and dirty targets ("dirty NAME" + indented status). */
   precheck: (m: Manifest) =>
     `${TERMINAL_PATH}
@@ -268,6 +325,13 @@ ${m.targets
   .map((t) => `if cd ${dq(t.path)} 2>/dev/null && [ -n "$(git status --porcelain)" ]; then echo ${sq(`dirty ${t.name}`)}; git status --short | head -n 15 | sed 's/^/  /'; fi`)
   .join("\n")}`,
 };
+
+/** Output of scripts.mounts -> mounted paths per target index. */
+export function parseMounts(out: string): string[][] {
+  const r: string[][] = [];
+  for (const m of out.matchAll(/^(\d+) (.+)$/gm)) (r[+m[1]] ??= []).push(m[2]);
+  return r;
+}
 
 /** Output of scripts.pm2Apps -> process names (sorted), or null when pm2 isn't installed. */
 export function parsePm2(out: string): string[] | null {

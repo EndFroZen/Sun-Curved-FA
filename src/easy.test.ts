@@ -117,7 +117,7 @@ assert.equal(errKey("metadata.name: lowercase letters"), "metadata.name");
   assert.deepEqual((stepsOf(e, 0)[3] as any).if.then, [{ log: "ok" }, { pm2: { app: "web", do: "restart" } }]);
   // npm run build (index 2) becomes an if of its own; the old empty if can be deleted
   assert.ok(wrapInIf(e, 0, S, 2));
-  assert.deepEqual(stepsOf(e, 0)[2], { if: { run: "npm run build", then: [{ log: "npm run build ผ่าน" }], else: [{ fail: "npm run build ไม่ผ่าน" }] } });
+  assert.deepEqual(stepsOf(e, 0)[2], { if: { run: "npm run build", then: [{ log: "npm run build passed" }], else: [{ fail: "npm run build failed" }] } });
   // move the whole then-list content of the old if (index 3) into the new one (index 2), then out of an if
   assert.ok(moveStep(e, 0, [...S, 3, "if", "then"], 1, [...S, 2, "if", "then"]));
   assert.ok(moveStep(e, 0, [...S, 2, "if", "then"], 0, S, 3)); // the log goes out, right after the if
@@ -125,7 +125,7 @@ assert.equal(errKey("metadata.name: lowercase letters"), "metadata.name");
   assert.deepEqual((stepsOf(e, 0)[2] as any).if.then, [{ pm2: { app: "web", do: "restart" } }]);
   // moving a step that sits above an if into that if: the if's index shifts, still lands right
   assert.ok(moveStep(e, 0, S, 1, [...S, 2, "if", "else"], 0));
-  assert.deepEqual((stepsOf(e, 0)[1] as any).if.else, [{ run: "npm ci" }, { fail: "npm run build ไม่ผ่าน" }]);
+  assert.deepEqual((stepsOf(e, 0)[1] as any).if.else, [{ run: "npm ci" }, { fail: "npm run build failed" }]);
   // emptied then / else lists go away; not allowed: into itself, checkout into an if
   assert.ok(moveStep(e, 0, [...S, 3, "if", "then"], 0, S));
   assert.ok(!("then" in (stepsOf(e, 0)[3] as any).if));

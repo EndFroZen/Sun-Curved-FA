@@ -24,6 +24,7 @@ struct ExecReq {
     command: String,
     stdin: Option<String>, // e.g. a whole script for `bash -s`; keeps secrets out of `ps`
     stream: bool,          // emit exec-data-{sid} chunks while it runs
+    timeout_ms: u32,       // read timeout while it runs, 0 = none (a dead link then hangs until TCP gives up)
 }
 
 #[derive(Serialize)]
@@ -244,9 +245,9 @@ fn io_loop(app: AppHandle, sid: u32, sess: Session, mut shell: Channel, rx: Rece
 }
 
 fn exec(app: &AppHandle, sid: u32, sess: &Session, req: &ExecReq) -> Result<ExecOut, Box<dyn std::error::Error>> {
-    // Builds can be quiet for minutes: no read timeout while a command runs.
+    // Builds can be quiet for minutes: no read timeout unless the caller asks (deploy follow sends heartbeats).
     // ponytail: a hung command blocks this machine's session; add a cancel button if that bites.
-    sess.set_timeout(0);
+    sess.set_timeout(req.timeout_ms);
     let r = exec_inner(app, sid, sess, req);
     sess.set_timeout(30_000);
     r
@@ -298,9 +299,16 @@ fn term_resize(sid: u32, cols: u32, rows: u32) {
 
 /// Runs a command on the machine over the already-authenticated session.
 #[tauri::command]
-async fn remote_exec(sid: u32, command: String, stdin: Option<String>, stream: Option<bool>) -> Result<ExecOut, String> {
+async fn remote_exec(
+    sid: u32,
+    command: String,
+    stdin: Option<String>,
+    stream: Option<bool>,
+    timeout_ms: Option<u32>,
+) -> Result<ExecOut, String> {
     let (tx, rx) = channel();
-    send(sid, Req::Exec(ExecReq { command, stdin, stream: stream.unwrap_or(false) }, tx))?;
+    let req = ExecReq { command, stdin, stream: stream.unwrap_or(false), timeout_ms: timeout_ms.unwrap_or(0) };
+    send(sid, Req::Exec(req, tx))?;
     tauri::async_runtime::spawn_blocking(move || rx.recv().map_err(|_| "disconnected".to_string())?)
         .await
         .map_err(|e| e.to_string())?
@@ -367,11 +375,157 @@ fn del_secret(id: i64) -> Result<(), String> {
     }
 }
 
+// ---------- SSH tunnel (local port forward) for the database app ----------
+// 127.0.0.1:<random> -> SSH server -> remote_host:remote_port, over one logged-in session.
+// Reused per (ssh conn, remote host, port) until the session dies.
+
+static TUNNELS: LazyLock<Mutex<HashMap<String, u16>>> = LazyLock::new(Default::default);
+/// Bumped by ssh_tunnels_close; each tunnel loop stops when it no longer matches its start value.
+static TUNNEL_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// Closes every SSH tunnel (frees the sessions and local ports), e.g. when the database app is swiped away.
+#[tauri::command]
+fn ssh_tunnels_close() {
+    TUNNEL_GEN.fetch_add(1, Ordering::Relaxed);
+    TUNNELS.lock().unwrap().clear();
+}
+
+#[tauri::command]
+async fn ssh_tunnel(
+    app: AppHandle,
+    id: i64,
+    host: String,
+    port: u16,
+    user: String,
+    key_path: String,
+    remote_host: String,
+    remote_port: u16,
+) -> Result<u16, String> {
+    let key = format!("{id}|{remote_host}|{remote_port}");
+    if let Some(p) = TUNNELS.lock().unwrap().get(&key) {
+        return Ok(*p);
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let saved = secret(id)?.get_password().ok();
+        // sid 0: auth prompts show as a plain "Sign in" popup (no terminal tab owns this session).
+        let sess = login(&app, 0, &host, port, &user, &key_path, saved).map_err(|e| e.to_string())?;
+        sess.set_keepalive(true, 30);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+        let local = listener.local_addr().map_err(|e| e.to_string())?.port();
+        listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+        TUNNELS.lock().unwrap().insert(key.clone(), local);
+        let started = TUNNEL_GEN.load(Ordering::Relaxed);
+        std::thread::spawn(move || {
+            tunnel_loop(&sess, &listener, &remote_host, remote_port, started);
+            let mut t = TUNNELS.lock().unwrap();
+            if t.get(&key) == Some(&local) {
+                t.remove(&key); // a newer tunnel for the same key may already be registered
+            }
+        });
+        Ok(local)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+struct Pipe {
+    tcp: TcpStream,
+    ch: Channel,
+    to_ch: Vec<u8>,
+    to_tcp: Vec<u8>,
+    done: bool,
+}
+
+// ponytail: single-thread 2ms poll loop over all forwarded sockets; fine for a DB pool, not for bulk transfer.
+fn tunnel_loop(sess: &Session, listener: &std::net::TcpListener, rhost: &str, rport: u16, started: u64) {
+    let mut pipes: Vec<Pipe> = Vec::new();
+    let mut buf = [0u8; 32768];
+    let mut last_ka = std::time::Instant::now();
+    loop {
+        if TUNNEL_GEN.load(Ordering::Relaxed) != started {
+            let _ = sess.disconnect(None, "closed", None);
+            return;
+        }
+        let mut idle = true;
+        match listener.accept() {
+            Ok((tcp, _)) => {
+                idle = false;
+                sess.set_blocking(true);
+                let ch = sess.channel_direct_tcpip(rhost, rport, None);
+                sess.set_blocking(false);
+                match ch {
+                    Ok(ch) if tcp.set_nonblocking(true).is_ok() => pipes.push(Pipe { tcp, ch, to_ch: Vec::new(), to_tcp: Vec::new(), done: false }),
+                    Ok(_) => {}
+                    Err(_) => return, // session gone (or target refused): drop the tunnel, the next connect builds a new one
+                }
+            }
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {}
+            Err(_) => return,
+        }
+        sess.set_blocking(false);
+        // Ok(0) = would block; Err = closed or failed.
+        let nb = |r: std::io::Result<usize>| match r {
+            Ok(0) => Err(()),
+            Ok(n) => Ok(n),
+            Err(e) if e.kind() == ErrorKind::WouldBlock => Ok(0),
+            Err(_) => Err(()),
+        };
+        for p in pipes.iter_mut() {
+            let mut moved = 0;
+            if p.to_ch.is_empty() {
+                match nb(p.tcp.read(&mut buf)) {
+                    Ok(n) => (p.to_ch.extend_from_slice(&buf[..n]), moved += n).1,
+                    Err(()) => p.done = true,
+                }
+            }
+            if !p.to_ch.is_empty() {
+                match nb(p.ch.write(&p.to_ch)) {
+                    Ok(n) => (p.to_ch.drain(..n), moved += n).1,
+                    Err(()) => p.done = true,
+                }
+            }
+            if p.to_tcp.is_empty() {
+                match nb(p.ch.read(&mut buf)) {
+                    Ok(n) => (p.to_tcp.extend_from_slice(&buf[..n]), moved += n).1,
+                    Err(()) => p.done = true,
+                }
+            }
+            if !p.to_tcp.is_empty() {
+                match nb(p.tcp.write(&p.to_tcp)) {
+                    Ok(n) => (p.to_tcp.drain(..n), moved += n).1,
+                    Err(()) => p.done = true,
+                }
+            }
+            if moved > 0 {
+                idle = false;
+            }
+        }
+        for p in pipes.iter_mut().filter(|p| p.done) {
+            let _ = p.tcp.shutdown(std::net::Shutdown::Both);
+            let _ = p.ch.close();
+        }
+        pipes.retain(|p| !p.done);
+        if last_ka.elapsed() > Duration::from_secs(15) {
+            last_ka = std::time::Instant::now();
+            sess.set_blocking(true);
+            let alive = sess.keepalive_send().is_ok();
+            sess.set_blocking(false);
+            if !alive {
+                return;
+            }
+        }
+        if idle {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_sql::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_http::init())
         .invoke_handler(tauri::generate_handler![
             ssh_connect,
             ssh_disconnect,
@@ -381,7 +535,9 @@ pub fn run() {
             auth_answer,
             set_secret,
             get_secret,
-            del_secret
+            del_secret,
+            ssh_tunnel,
+            ssh_tunnels_close
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

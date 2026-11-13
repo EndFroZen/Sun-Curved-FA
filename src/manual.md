@@ -1,58 +1,60 @@
-# คู่มือเขียน Deploy YAML ของ Sun Curved
+# Sun Curved Deploy YAML Manual
 
-## 1. ภาพรวม: YAML ไปเป็น sh แล้วรันอย่างไร
+## 1. Overview: how YAML becomes sh and runs
 
-คุณเขียนแค่ YAML ไฟล์เดียวบอกว่า "อยากให้ deploy แบบไหน" ส่วน Sun Curved แปลง YAML นั้นเป็นสคริปต์ bash ทั้งไฟล์ แล้วส่งไปรันบนเครื่องปลายทางผ่าน SSH ที่ล็อกอินไว้แล้ว แนวคิดเดียวกับ Kubernetes คือ YAML เป็นคำประกาศ ส่วนขั้นตอนจริงเป็นงานของโปรแกรม
+You write a single YAML file that says "how I want this deployed". Sun Curved turns that YAML into a complete bash script and runs it on the target machine over the SSH connection you are already logged in to. Same idea as Kubernetes: the YAML is a declaration, the actual steps are the program's job.
 
-เมื่อกด **Apply** ในหน้า Deploy จะเกิดขึ้นตามลำดับนี้:
+When you press **Apply** on the Deploy page, this happens in order:
 
-1. **ตรวจ YAML ในแอป** ถ้าผิดจะขึ้นข้อความสีแดงเหนือตัวแก้ และไม่มีอะไรถูกส่งไปที่เครื่อง
-2. **บันทึก YAML** ลงเครื่องที่ `~/EndFroZen/SunCurved/deployments/<name>.yaml`
-3. **ตรวจก่อนรัน:** ดึงรายการ tag จาก git และดูว่า target ไหนมีไฟล์แก้ค้าง
-4. **Popup ยืนยัน:** เลือก tag และติ๊กยืนยันทิ้งไฟล์ที่แก้ค้าง (ถ้ามี)
-5. **แปลงเป็น bash:** ใส่ tag ที่เลือก คำตอบเรื่องไฟล์แก้ค้าง และรหัส sudo ลงในสคริปต์
-6. **รัน:** ส่งสคริปต์ทั้งก้อนเข้า `bash -l -s` บนเครื่อง output ขึ้นใน Deploy log ทีละบรรทัดระหว่างรัน (มุมขวาของ Deploy log: **Clear** ล้าง log, **Full** ขยายเต็มจอ กด **ย่อ** หรือ Esc เพื่อกลับ)
-7. **บันทึกผล:** เขียน tag, ok หรือ failed และเวลา ลง `~/EndFroZen/SunCurved/state/<name>`
+1. **Validate the YAML in the app.** If something is wrong, a red message shows above the editor and nothing is sent to the machine
+2. **Save the YAML** on the machine at `~/EndFroZen/SunCurved/deployments/<name>.yaml`
+3. **Precheck:** fetch the tag list from git and see which targets have uncommitted changes
+4. **Confirm popup:** pick a tag and tick the box to discard uncommitted changes (if any)
+5. **Compile to bash:** the chosen tag, the answers about uncommitted changes and the sudo password go into the script
+6. **Run:** the whole script is piped into `bash -l -s` on the machine; output appears in the Deploy log line by line while it runs (top right of the Deploy log: **Mounts** prints what is mounted on the machine, **Clear** clears the log, **Full** makes it full screen, **Exit** or Esc puts it back)
+7. **Record the result:** writes the tag, ok or failed, and the time to `~/EndFroZen/SunCurved/state/<name>`
 
-**ไฟล์ที่เกิดบนเครื่องปลายทางมีแค่ 2 ไฟล์ต่อ deployment:**
+To keep your work without deploying, press **Save** (or Ctrl+S) instead. It saves the YAML even if it is unfinished; only `metadata.name` has to be valid, since that is the file name. The remaining errors stay in red until you fix them before Apply.
 
-| ไฟล์ | เก็บอะไร | ใครเขียน |
+**Only 2 files are created on the target machine per deployment:**
+
+| File | Holds | Written by |
 | --- | --- | --- |
-| `~/EndFroZen/SunCurved/deployments/<name>.yaml` | YAML ที่คุณเขียน | แอป ตอนกด Apply |
-| `~/EndFroZen/SunCurved/state/<name>` | `<tag> ok\|failed <วันที่ เวลา>` | สคริปต์ ตอนรันจบ |
+| `~/EndFroZen/SunCurved/deployments/<name>.yaml` | The YAML you wrote | The app, on Save or Apply |
+| `~/EndFroZen/SunCurved/state/<name>` | `<tag> ok\|failed <date time>` | The script, when it finishes |
 
-ตอน Apply ไม่มีไฟล์ `.sh` ถูกเขียนลงดิสก์ สคริปต์อยู่ในหน่วยความจำของ bash ขณะรันเท่านั้น (ถ้าอยากได้ไฟล์ไว้รันเอง ใช้ **⋯ → Save sh ลงเครื่อง** ดูหัวข้อ 9) รหัส sudo จึงไม่ค้างอยู่ในไฟล์ใด และไม่โผล่ใน `ps` ถ้าอยากเห็นสคริปต์ที่จะรันจริง กดแท็บ **sh** ในแถบมุมมอง
+Apply writes no `.sh` file to disk. The script only lives in bash's memory while it runs (if you want a file to run yourself, use **⋯ → Save sh to the machine**, see section 9). So the sudo password never sits in any file and never shows in `ps`. To see the script that will actually run, press the **sh** tab in the view bar.
 
-## 2. พื้นฐาน YAML ที่ต้องรู้
+## 2. YAML basics you need
 
-YAML ใช้การย่อหน้าบอกว่าอะไรอยู่ใต้อะไร กฎที่สำคัญที่สุดคือ**ย่อหน้าด้วยช่องว่าง 2 ช่อง ห้ามใช้ Tab** ในตัวแก้ของแอป กด Tab แล้วได้ช่องว่าง 2 ช่องให้อยู่แล้ว
+YAML uses indentation to say what belongs under what. The most important rule: **indent with 2 spaces, never Tab**. In the app's editor, pressing Tab already inserts 2 spaces.
 
 ### Map (key: value)
 
 ```yaml
-metadata:          # key ที่มีของอยู่ข้างใน ลงท้ายด้วย : แล้วขึ้นบรรทัดใหม่
-  name: my-app     # ย่อเข้า 2 ช่อง = อยู่ใต้ metadata
+metadata:          # a key with things inside ends with : and a new line
+  name: my-app     # indented 2 spaces = under metadata
 ```
 
-- หลัง `:` ต้องมีช่องว่าง 1 ช่องเสมอ เช่น `name: my-app` ไม่ใช่ `name:my-app`
-- key ที่อยู่ระดับเดียวกันต้องย่อหน้าเท่ากันทุกช่อง
-- ชื่อ key ตัวพิมพ์เล็ก-ใหญ่ต่างกัน: `envFrom` ไม่เท่ากับ `envfrom`
+- Always put 1 space after `:`, e.g. `name: my-app`, not `name:my-app`
+- Keys on the same level must have exactly the same indentation
+- Keys are case sensitive: `envFrom` is not `envfrom`
 
-### List (รายการ)
+### List
 
-แต่ละรายการขึ้นต้นด้วย ` -  ` ถ้ารายการมีหลาย key ให้ key ถัดไปตรงแนวกับ key แรกหลัง ` -  `
+Each item starts with `- `. If an item has several keys, the following keys line up with the first key after `- `
 
 ```yaml
 targets:
-  - name: main            # รายการที่ 1
-    path: ~/app-main      # ตรงแนวกับ name (ไม่ใช่ตรงกับ -)
-  - name: sub             # รายการที่ 2
+  - name: main            # item 1
+    path: ~/app-main      # lined up with name (not with -)
+  - name: sub             # item 2
     path: ~/app-sub
 ```
 
-### เขียนแบบบรรทัดเดียว (flow style)
+### One-line form (flow style)
 
-สองแบบนี้ความหมายเหมือนกัน ใช้แบบไหนก็ได้:
+These two mean the same thing; use either:
 
 ```yaml
 auth: { user: GITHUB_USERNAME, token: GITHUB_TOKEN }
@@ -62,21 +64,21 @@ auth:
   token: GITHUB_TOKEN
 ```
 
-### Comment
+### Comments
 
-ทุกอย่างหลัง `#` คือ comment ถูกข้ามตอนอ่าน ในกรณีเป็นค่า ต้องมีช่องว่างก่อน `#` เช่น `dirty: ask   # ถามก่อน`
+Everything after `#` is a comment and is ignored. After a value there must be a space before `#`, e.g. `dirty: ask   # ask first`
 
-### เมื่อไหร่ต้องใส่เครื่องหมายคำพูด
+### When to use quotes
 
-ค่าส่วนใหญ่ไม่ต้องใส่ แต่ใส่ `"..."` เมื่อ:
+Most values need none, but use `"..."` when:
 
-- ค่าขึ้นต้นด้วย `{` `[` `*` `&` `!` `%` `@` หรือ `` ` ``
-- ค่ามี ` :  ` (โคลอนตามด้วยช่องว่าง) หรือ `  # ` อยู่ข้างใน
-- อยากให้เป็นข้อความแทนตัวเลขหรือ true/false เช่น `version: "1.10"` (ไม่ใส่ จะได้ 1.1)
+- The value starts with `{` `[` `*` `&` `!` `%` `@` or `` ` ``
+- The value contains `: ` (colon followed by a space) or ` #`
+- You want text instead of a number or true/false, e.g. `version: "1.10"` (without quotes you get 1.1)
 
-### คำสั่งหลายบรรทัด (`|`)
+### Multi-line commands (`|`)
 
-ใช้ `|` แล้วเขียนคำสั่งในบรรทัดถัดไป ย่อหน้าเข้าไปอีก 2 ช่อง ทุกบรรทัดถูกรันตามลำดับ บรรทัดไหนพัง deploy หยุดทันที:
+Use `|` and write the commands on the following lines, indented 2 more spaces. Every line runs in order; if any line fails the deploy stops right away:
 
 ```yaml
     build: |
@@ -85,81 +87,81 @@ auth:
       pm2 reload ecosystem.config.js
 ```
 
-### ข้อผิดพลาดยอดฮิต
+### Common mistakes
 
-| เขียนผิด | ที่ถูก | ทำไม |
+| Wrong | Right | Why |
 | --- | --- | --- |
-| ใช้ Tab ย่อหน้า | ช่องว่าง 2 ช่อง | YAML ห้าม Tab |
-| `name:main` | `name: main` | ต้องมีช่องว่างหลัง `:` |
-| key ใน list ตรงกับ `-` | ตรงกับ key แรกหลัง ` -  ` | ไม่งั้นกลายเป็น key ของระดับบน |
-| `version: 1.10` | `version: "1.10"` | ไม่ใส่เครื่องหมายคำพูด จะกลายเป็นตัวเลข 1.1 |
-| key ซ้ำในระดับเดียวกัน | เหลือตัวเดียว | YAML แจ้ง error "Map keys must be unique" |
+| Indenting with Tab | 2 spaces | YAML forbids Tab |
+| `name:main` | `name: main` | Needs a space after `:` |
+| List keys lined up with `-` | Lined up with the first key after `- ` | Otherwise they become keys of the level above |
+| `version: 1.10` | `version: "1.10"` | Without quotes it becomes the number 1.1 |
+| Duplicate key on the same level | Keep only one | YAML reports "Map keys must be unique" |
 
-## 3. โครงสร้างทั้งไฟล์ + apiVersion / kind / metadata
+## 3. Whole-file structure + apiVersion / kind / metadata
 
-ทุกไฟล์มีหน้าตาแบบนี้ (ช่องที่มี `?` ไม่บังคับ):
+Every file looks like this (fields marked `?` are optional):
 
 ```yaml
-apiVersion: suncurved/v1        # บังคับ ค่าตายตัว
-kind: Deployment                # บังคับ ค่าตายตัว
+apiVersion: suncurved/v1        # required, fixed value
+kind: Deployment                # required, fixed value
 metadata:
-  name: <ชื่อ>                  # บังคับ
+  name: <name>                  # required
 spec:
-  envFrom: <ไฟล์ env>           # ?
-  sudo: login-password | none   # ? (ค่าเริ่มต้น none)
+  envFrom: <env file>           # ?
+  sudo: login-password | none   # ? (default none)
   source:
-    repo: <git repo>            # บังคับ
+    repo: <git repo>            # required
     auth: { user: VAR, token: VAR }   # ?
-    version: tag | <ชื่อ tag>   # ? (ค่าเริ่มต้น tag)
-    branch: <ชื่อ branch>       # ? ใช้แทน version ถ้าไม่มี tag
-  targets:                      # บังคับ อย่างน้อย 1
-    - name: <ชื่อ>
-      path: <โฟลเดอร์ git>
-      dirty: ask | discard | fail   # ? (ค่าเริ่มต้น ask)
-      build: <คำสั่ง>           # ?
-      pm2: <ชื่อ process>       # ?
+    version: tag | <tag name>   # ? (default tag)
+    branch: <branch name>       # ? use instead of version if there are no tags
+  targets:                      # required, at least 1
+    - name: <name>
+      path: <git folder>
+      dirty: ask | discard | fail   # ? (default ask)
+      build: <command>          # ?
+      pm2: <process name>       # ?
       mounts:                   # ?
-        - from: <ต้นทาง>
-          to: <ปลายทาง>
+        - from: <source>
+          to: <destination>
 ```
 
-key ที่ไม่รู้จัก (เช่นพิมพ์ผิดเป็น `biuld`) **จะถูกเงียบข้ามไป ไม่ error** ถ้าทำงานไม่ตรงใจ ให้กดแท็บ **sh** ดูว่าขั้นตอนนั้นอยู่ในสคริปต์จริงหรือไม่
+Unknown keys (e.g. a typo like `biuld`) **are silently ignored, not an error**. If something doesn't behave as expected, press the **sh** tab and check whether that step is really in the script.
 
-### apiVersion และ kind
+### apiVersion and kind
 
-ต้องเป็น `suncurved/v1` และ `Deployment` ตรงตัวอักษร ไว้กันเอาไฟล์ Kubernetes จริงมาใส่ผิดที่
+Must be exactly `suncurved/v1` and `Deployment`. This stops a real Kubernetes file from being used here by mistake.
 
 ### metadata.name
 
-ชื่อของ deployment นี้ ใช้เป็นชื่อไฟล์บนเครื่องปลายทาง:
+The name of this deployment, used as the file name on the target machine:
 
-- `~/EndFroZen/SunCurved/deployments/<name>.yaml` — ตัว YAML
-- `~/EndFroZen/SunCurved/state/<name>` — สถานะล่าสุด เช่น `v1.2.0 ok 2026-11-05 14:03:11`
+- `~/EndFroZen/SunCurved/deployments/<name>.yaml` — the YAML
+- `~/EndFroZen/SunCurved/state/<name>` — latest status, e.g. `v1.2.0 ok 2026-11-05 14:03:11`
 
-กฎ: ตัวพิมพ์เล็ก a-z, ตัวเลข 0-9 และ `-` เท่านั้น ห้ามขึ้นต้นหรือลงท้ายด้วย `-` ยาวไม่เกิน 63 ตัว
+Rules: lowercase a-z, digits 0-9 and `-` only, must not start or end with `-`, at most 63 characters.
 
-| ชื่อ | ผล |
+| Name | Result |
 | --- | --- |
 | `ssw-icare` | ✅ |
 | `app2` | ✅ |
-| `SSW-iCare` | ❌ มีตัวใหญ่ |
-| `my_app` | ❌ มี `_` |
-| `-app` | ❌ ขึ้นต้นด้วย `-` |
+| `SSW-iCare` | ❌ has uppercase |
+| `my_app` | ❌ has `_` |
+| `-app` | ❌ starts with `-` |
 
-**ระวัง:** Apply ด้วยชื่อเดิม = เขียนทับไฟล์เดิม เปลี่ยนชื่อ = ได้ deployment ใหม่ (อันเก่ายังอยู่ ลบเองด้วย ⋯ → ลบ deployment นี้)
+**Careful:** Save/Apply with the same name = overwrites the old file. A new name = a new deployment (the old one stays; delete it yourself with ⋯ → Delete this deployment)
 
-## 4. spec.envFrom และ spec.sudo
+## 4. spec.envFrom and spec.sudo
 
-### envFrom — ไฟล์ตัวแปรบนเครื่องปลายทาง
+### envFrom — a variables file on the target machine
 
 ```yaml
 spec:
   envFrom: ~/EndFroZen/CommandCenter/endfrozen.env
 ```
 
-สคริปต์จะรัน `set -a; . "<ไฟล์>"; set +a` ก่อนทุกอย่าง ตัวแปรทุกตัวในไฟล์จึงถูก export ให้คำสั่ง build และ git ใช้ได้
+The script runs `set -a; . "<file>"; set +a` before anything else, so every variable in the file is exported for the build commands and git.
 
-ตัวอย่างไฟล์ (อยู่บนเครื่อง server ไม่ได้อยู่ในแอป):
+Example file (lives on the server, not in the app):
 
 ```bash
 GITHUB_USERNAME=sukkla01
@@ -167,67 +169,67 @@ GITHUB_TOKEN=ghp_xxxxxxxxxxxx
 NODE_ENV=production
 ```
 
-- `~/` ใช้ได้ ถูกแปลงเป็น `$HOME/`
-- ไฟล์ต้องเป็น bash ที่ถูกต้อง ห้ามมีช่องว่างรอบ `=`; ค่าที่มีช่องว่างต้องใส่ `"..."`
-- ไม่มีไฟล์ → deploy พังตั้งแต่บรรทัดแรก
-- **ความลับอยู่บนเครื่องนั้นเท่านั้น** แอปไม่อ่าน ไม่เก็บ และไม่ส่งค่าเหล่านี้กลับมา ให้ `chmod 600` ไฟล์นี้
+- `~/` works; it becomes `$HOME/`
+- The file must be valid bash: no spaces around `=`; values with spaces need `"..."`
+- File missing → the deploy fails on the first line
+- **Secrets stay on that machine only.** The app never reads, stores or sends these values back. `chmod 600` this file
 
-### sudo — ใช้ sudo ได้หรือไม่
+### sudo — whether sudo may be used
 
-| ค่า | ความหมาย |
+| Value | Meaning |
 | --- | --- |
-| `none` (ค่าเริ่มต้น) | ไม่ใช้ sudo; ใช้ `mounts` ไม่ได้ |
-| `login-password` | ใช้รหัสผ่านที่บันทึกไว้ตอนสร้าง connection เป็นรหัส sudo |
+| `none` (default) | No sudo; `mounts` can't be used |
+| `login-password` | Uses the password saved with the connection as the sudo password |
 
-เมื่อเป็น `login-password` แอปจะดึงรหัสจาก Windows Credential Manager ตอนกด Apply แล้วส่งเข้าสคริปต์ทาง stdin (ไม่อยู่ใน argument จึงไม่โผล่ใน `ps`) คำสั่ง sudo รันผ่าน `printf '%s\n' "$SUDO_PW" | sudo -S -p ''`
+With `login-password`, the app reads the password from Windows Credential Manager when you press Apply and passes it to the script via stdin (not as an argument, so it doesn't show in `ps`). sudo commands run as `printf '%s\n' "$SUDO_PW" | sudo -S -p ''`
 
-เงื่อนไข:
+Conditions:
 
-- รหัส sudo ของ user ต้อง**ตรงกับ**รหัส login ที่บันทึก
-- ถ้า connection ใช้ key file ค่าที่บันทึกคือ passphrase ของ key ไม่ใช่รหัส sudo — กรณีนี้ใช้ `sudo: none` แล้วตั้ง NOPASSWD ใน sudoers สำหรับ `mount`/`umount` แทน
-- ตอนนี้แอปใช้ sudo เฉพาะ `mounts` ถ้าคำสั่งใน `build` เรียก `sudo` เอง จะไม่มีใครป้อนรหัสให้ (stdin เป็น /dev/null) และจะ error
+- The user's sudo password must **match** the saved login password
+- If the connection uses a key file, the saved value is the key's passphrase, not the sudo password — in that case use `sudo: none` and set NOPASSWD in sudoers for `mount`/`umount` instead
+- Right now the app only uses sudo for `mounts`. If a `build` command calls `sudo` itself, nobody will type the password (stdin is /dev/null) and it will error
 
 ## 5. spec.source — repo, auth, version
 
 ### repo
 
-| เขียน | ใช้จริง |
+| Written | Actually used |
 | --- | --- |
 | `github.com/sukkla01/sprdd-ext` | `https://github.com/sukkla01/sprdd-ext.git` |
 | `github.com/sukkla01/sprdd-ext.git` | `https://github.com/sukkla01/sprdd-ext.git` |
-| `https://gitlab.example.com/a/b.git` | ตามที่เขียน (มี scheme) |
-| `git@github.com:sukkla01/sprdd-ext.git` | ตามที่เขียน (มี `@` = SSH) |
-| `file:///srv/repos/app.git` | ตามที่เขียน |
+| `https://gitlab.example.com/a/b.git` | As written (has a scheme) |
+| `git@github.com:sukkla01/sprdd-ext.git` | As written (has `@` = SSH) |
+| `file:///srv/repos/app.git` | As written |
 
-ถ้าไม่มี scheme และไม่มี `@` แอปจะเติม `https://` หน้าและ `.git` ท้ายให้
+With no scheme and no `@`, the app adds `https://` in front and `.git` at the end.
 
-**ห้ามใส่ token ใน URL** เช่น `https://ghp_xxx@github.com/...` — มันจะไปอยู่ในไฟล์ YAML และใน log ให้ใช้ `auth` แทน
+**Never put a token in the URL**, e.g. `https://ghp_xxx@github.com/...` — it would end up in the YAML file and in the log. Use `auth` instead.
 
-### auth (ไม่บังคับ — repo public หรือใช้ SSH key ไม่ต้องใส่)
+### auth (optional — not needed for a public repo or an SSH key)
 
 ```yaml
     auth: { user: GITHUB_USERNAME, token: GITHUB_TOKEN }
 ```
 
-ค่าที่ใส่คือ**ชื่อตัวแปร** ใน `envFrom` ไม่ใช่ค่าจริง (ต้องขึ้นต้นด้วยตัวอักษรหรือ `_` ตามด้วยตัวอักษร ตัวเลข `_`) git จะได้ username/password ผ่าน credential helper ที่อ่านตัวแปรตอนรัน token จึงไม่อยู่ใน URL ไม่อยู่ในคำสั่ง และไม่อยู่ใน `.git/config`
+The values are **variable names** from `envFrom`, not the real values (must start with a letter or `_`, followed by letters, digits, `_`). git gets the username/password through a credential helper that reads the variables at run time, so the token is never in the URL, never in a command and never in `.git/config`.
 
-GitHub: token ต้องมีสิทธิ์อ่าน repo (fine-grained: Contents = Read)
+GitHub: the token needs read access to the repo (fine-grained: Contents = Read)
 
 ### version
 
-| ค่า | พฤติกรรม |
+| Value | Behaviour |
 | --- | --- |
-| `tag` (ค่าเริ่มต้น) | ตอน Apply แอปรัน `git ls-remote --tags` แล้วให้เลือก tag ใน popup (ใหม่สุดอยู่บน เรียงแบบ version: v1.10.0 > v1.9.0) |
-| ชื่อ tag เช่น `"v1.2.0"` | ล็อกไว้ที่ tag นั้น popup แสดงตัวเลือกเดียว |
+| `tag` (default) | On Apply the app runs `git ls-remote --tags` and lets you pick a tag in the popup (newest on top, version order: v1.10.0 > v1.9.0) |
+| A tag name, e.g. `"v1.2.0"` | Pinned to that tag; the popup shows a single choice |
 
-ข้อควรรู้:
+Good to know:
 
-- `version` ใช้กับ **tag** เท่านั้น ใส่ commit hash ไม่ได้ ถ้า project ไม่มี tag ให้ใช้ `branch` แทน (ดูด้านล่าง)
-- tag ต้อง push ขึ้น remote แล้ว: `git tag v1.2.0 && git push origin v1.2.0`
-- ใส่ `"..."` ครอบ version ที่ดูเหมือนตัวเลข เช่น `"1.10"`
-- checkout tag ทำให้ repo อยู่ในสถานะ detached HEAD เป็นเรื่องปกติ
+- `version` only works with **tags**; a commit hash won't work. If the project has no tags, use `branch` instead (see below)
+- The tag must be pushed to the remote: `git tag v1.2.0 && git push origin v1.2.0`
+- Quote versions that look like numbers, e.g. `"1.10"`
+- Checking out a tag leaves the repo in detached HEAD; that's normal
 
-### branch — project ที่ไม่มี tag (git pull)
+### branch — projects without tags (git pull)
 
 ```yaml
   source:
@@ -235,26 +237,26 @@ GitHub: token ต้องมีสิทธิ์อ่าน repo (fine-graine
     branch: main
 ```
 
-- ตอน Apply ไม่ต้องเลือก tag ระบบจะดึง commit ล่าสุดของ branch นั้นมาเลย
-- ทำงานเหมือน `git pull --ff-only` แต่ดึงจาก `spec.source.repo`: `fetch` → `checkout <branch>` → `merge --ff-only`
-- ถ้า branch บนเครื่องมี commit ที่ไม่มีบน remote (diverged) จะหยุด ไม่ merge ให้ ต้องแก้เองใน Terminal
-- state จะบันทึกเป็น `main@a1b2c3d ok <วันเวลา>`
-- ใส่ `version` กับ `branch` พร้อมกันไม่ได้ ในโหมดง่ายให้เลือกชิป **git pull branch**
+- No tag to pick on Apply; it fetches the latest commit of that branch
+- Works like `git pull --ff-only` but fetches from `spec.source.repo`: `fetch` → `checkout <branch>` → `merge --ff-only`
+- If the local branch has commits not on the remote (diverged) it stops and won't merge; fix it yourself in Terminal
+- The state is recorded as `main@a1b2c3d ok <date time>`
+- `version` and `branch` can't be used together; in the form pick the **git pull branch** chip
 
-## 6. spec.targets — ทุก field
+## 6. spec.targets — every field
 
-แต่ละ target = โฟลเดอร์ git หนึ่งตัวบนเครื่องปลายทาง ทำทีละตัว**ตามลำดับที่เขียน** (เช่น project หลักก่อน แล้ว sub project) ทุก target deploy tag เดียวกัน จาก repo เดียวกัน
+Each target = one git folder on the target machine, done one at a time **in the order written** (e.g. main project first, then the sub project). Every target deploys the same tag from the same repo.
 
-| field | บังคับ | ค่าเริ่มต้น | ทำอะไร |
+| Field | Required | Default | What it does |
 | --- | --- | --- | --- |
-| `name` | ✅ | — | ชื่อใน log กฎเดียวกับ metadata.name |
-| `path` | ✅ | — | โฟลเดอร์ที่ clone ไว้แล้ว (`~/` ได้) |
-| `dirty` | — | `ask` | ทำอะไรเมื่อมีไฟล์แก้ค้าง |
-| `build` | — | ไม่ build | คำสั่ง bash รันใน `path` |
-| `pm2` | — | ไม่เช็ค | ชื่อ process pm2 ที่จะรายงานสถานะ |
-| `mounts` | — | ไม่มี | bind mount (ต้อง `sudo: login-password`) |
+| `name` | ✅ | — | Name in the log; same rules as metadata.name |
+| `path` | ✅ | — | An already-cloned folder (`~/` works) |
+| `dirty` | — | `ask` | What to do with uncommitted changes |
+| `build` | — | no build | bash command run in `path` |
+| `pm2` | — | no check | pm2 process name to report the status of |
+| `mounts` | — | none | bind mounts (needs `sudo: login-password`) |
 
-### steps — ทำอะไร ลำดับไหนก็ได้
+### steps — anything, in any order
 
 ```yaml
     - name: main
@@ -267,65 +269,64 @@ GitHub: token ต้องมีสิทธิ์อ่าน repo (fine-graine
         - run: ./build.sh
         - mount: { from: /data/cache, to: public/cache }
         - pm2: { app: anima-dashboard, do: restart }
-        - log: deploy $TAG เสร็จแล้ว เช็คหน้าเว็บด้วย
+        - log: deploy $TAG done, check the website
 ```
 
-| ขั้นตอน | ทำอะไร |
+| Step | What it does |
 | --- | --- |
-| `checkout` | ดึง tag ที่เลือก (หรือ git pull ถ้าใช้ `branch`) ใช้ `dirty` ของ target ใส่ได้ครั้งเดียว |
-| `run: <คำสั่ง>` | รันคำสั่ง bash ใน path หลายบรรทัดใช้ `|` ได้ |
-| `unmount: <to>` | ถอด mount ถ้า mount อยู่ (ต้อง `sudo: login-password`) |
-| `mount: { from, to }` | `mount --bind` แล้วเช็คว่าติด (ต้อง `sudo: login-password`) |
-| `pm2: { app, do }` | `do` = `restart` / `reload` / `status` (ค่าเริ่มต้น status) แล้วพิมพ์สถานะ |
-| `log: <ข้อความ>` | เขียนข้อความลง Deploy log เป็นสีฟ้า ขึ้นต้นด้วย `## ` ใช้ `$TAG` `$BRANCH` หรือตัวแปรจากไฟล์ env ได้ หลายบรรทัดใช้ `|` ได้ ไม่นับเป็นขั้นตอน (ไม่ขึ้นใน Flow) |
+| `checkout` | Fetches the chosen tag (or git pull with `branch`), using the target's `dirty`. Only once per target |
+| `run: <command>` | Runs a bash command in path; `|` for multiple lines |
+| `unmount: <to>` | Unmounts if mounted (needs `sudo: login-password`) |
+| `mount: { from, to }` | `mount --bind` then checks it stuck (needs `sudo: login-password`) |
+| `pm2: { app, do }` | `do` = `restart` / `reload` / `status` (default status), then prints the status |
+| `log: <text>` | Writes a message to the Deploy log in blue, prefixed with `## `. `$TAG`, `$BRANCH` and env file variables work; `|` for multiple lines. Not counted as a step (not shown in Flow) |
+| `if: { run, then, else }` | Runs `run` as the condition (in path). Exit 0 = **pass**, runs `then` / failure = **fail**, runs `else`, and the deploy **carries on** (doesn't stop). ifs can be nested; `checkout` can't go inside |
+| `fail: <text>` | Stops the deploy here, prints `!! text` and records it as failed (use with `else`) |
 
-| `if: { run, then, else }` | รัน `run` เป็นเงื่อนไข (ใน path) จบด้วย exit 0 = **ผ่าน** ทำ `then` / พัง = **ไม่ผ่าน** ทำ `else` แล้ว deploy **ไปต่อ** (ไม่หยุด) ใส่ if ซ้อนกันได้ ใส่ `checkout` ข้างในไม่ได้ |
-| `fail: <ข้อความ>` | หยุด deploy ตรงนี้ พิมพ์ `!! ข้อความ` และบันทึกว่าล้มเหลว (ใช้คู่กับ `else`) |
+Runs top to bottom; a failing step = stop. The log shows `==> main: npm ci`
 
-ทำจากบนลงล่าง ขั้นไหนพัง = หยุด log จะแสดงเป็น `==> main: npm ci`
-
-#### if — เช็ค build ไม่ผ่าน หรือเงื่อนไขที่ตั้งเอง
+#### if — check for a failed build or your own condition
 
 ```yaml
       steps:
         - checkout
         - if:
-            run: ./build.sh                 # เงื่อนไข = คำสั่งอะไรก็ได้
-            then:                           # build ผ่าน
+            run: ./build.sh                 # condition = any command
+            then:                           # build passed
               - pm2: { app: my-app, do: restart }
-            else:                           # build ไม่ผ่าน
-              - log: build $TAG ไม่ผ่าน ใช้ตัวเดิมต่อ
-              - run: git checkout -q -      # กลับไป commit ก่อนหน้า
-              - fail: build ไม่ผ่าน          # อยากให้นับว่า deploy ล้มเหลวด้วย (ไม่ใส่ = สำเร็จ)
+            else:                           # build failed
+              - log: build $TAG failed, keeping the old one
+              - run: git checkout -q -      # back to the previous commit
+              - fail: build failed          # count the deploy as failed too (leave out = success)
 ```
 
-ตัวอย่างเงื่อนไขที่ตั้งเอง: `test -f dist/index.html` (มีไฟล์ไหม), `[ "$TAG" != v0.0.0 ]`, `curl -fs localhost:3000/health`, `! git diff --quiet HEAD@{1} -- package.json` (package.json เปลี่ยน) ไม่ใส่ `then` หรือ `else` ก็ได้ (แต่ต้องมีอย่างใดอย่างหนึ่ง)
+Examples of your own conditions: `test -f dist/index.html` (file exists?), `[ "$TAG" != v0.0.0 ]`, `curl -fs localhost:3000/health`, `! git diff --quiet HEAD@{1} -- package.json` (package.json changed). `then` or `else` can be left out (but one of them is required).
 
-เงื่อนไขหลายบรรทัด (`|`) พังที่บรรทัดไหน = ไม่ผ่านทันที บรรทัดที่เหลือไม่ทำ ใน Flow ขั้นตอนของทางที่ไม่ได้ไปจะขึ้นเป็นเส้นประขีดฆ่า และมีปุ่ม Simulate ทั้งแบบ "ผ่าน" และ "ไม่ผ่าน" ในโหมดง่ายกด **+ if** แล้วเพิ่มขั้นตอนใต้ "ถ้าผ่าน" / "ถ้าไม่ผ่าน" ได้เลย หรือกดปุ่ม ↳ (ย้าย) ที่ขั้นตอนไหนก็ได้: ย้ายเข้า "ถ้าผ่าน" / "ถ้าไม่ผ่าน" ของ if ไหนก็ได้, ย้ายออกจาก if, หรือที่ขั้นตอนคำสั่ง (เช่น `npm run build`) เลือก "ใช้คำสั่งนี้เป็นเงื่อนไข if" ได้ทันที
+In a multi-line condition (`|`), whichever line fails = fail right away; the rest isn't run. In Flow, the steps of the branch not taken show dashed and struck through, and there are Simulate buttons for both "pass" and "fail". In the form press **+ if** and add steps under "if pass" / "if fail", or press the ↳ (move) button on any step: move into "if pass" / "if fail" of any if, move out of an if, or on a command step (e.g. `npm run build`) choose "Use this command as an if condition".
 
-"build ไม่ผ่าน" ดูจาก **exit code** ไม่ต้องใช้ `2>&1` (อันนั้นแค่รวม error เข้ากับ output ที่พิมพ์ออกมา) `npm run build`, `tsc`, `vite build` ฯลฯ จบด้วย exit ไม่ใช่ 0 เองเมื่อพัง ถ้าเป็นสคริปต์ .sh ที่เขียนเอง ให้มี `set -e` บนสุด หรือ `exit 1` ตอนพัง ไม่งั้นจะได้ exit ของบรรทัดสุดท้าย
+"Build failed" is judged by the **exit code**; `2>&1` isn't needed (that only merges errors into the printed output). `npm run build`, `tsc`, `vite build` etc. exit non-zero by themselves when they fail. For your own .sh script, put `set -e` at the top or `exit 1` on failure, otherwise you get the exit code of the last line.
 
-**แบบเก่ายังใช้ได้:** target ที่ไม่มี `steps` แต่มี `build` / `mounts` / `pm2` จะทำตามลำดับเดิม (unmount → checkout → build → mount → pm2 status) ใส่ `steps` คู่กับ key แบบเก่าในตัวเดียวกันไม่ได้ ในโหมดง่าย พอแก้ขั้นตอนครั้งแรก ระบบจะแปลงเป็น `steps` ให้เอง
+**The old format still works:** a target without `steps` but with `build` / `mounts` / `pm2` runs in the fixed order (unmount → checkout → build → mount → pm2 status). `steps` can't be mixed with the old keys in the same target. In the form, the first time you edit the steps it converts to `steps` for you.
 
 ### path
 
-ต้องเป็น git repo ที่มีอยู่แล้ว แอป**ไม่ clone ให้** ครั้งแรกให้ clone เองใน Terminal: `git clone https://github.com/x/y.git ~/Projects/y` สคริปต์ fetch จาก `spec.source.repo` เสมอ (ไม่ใช้ `origin`)
+Must be an existing git repo; the app **does not clone it for you**. The first time, clone it yourself in Terminal: `git clone https://github.com/x/y.git ~/Projects/y`. The script always fetches from `spec.source.repo` (not `origin`).
 
 ### dirty
 
-"dirty" = `git status --porcelain` ไม่ว่าง รวมไฟล์ใหม่ที่ยังไม่ track (`??`) ด้วย ยกเว้นที่อยู่ใน `.gitignore`
+"dirty" = `git status --porcelain` is not empty, including new untracked files (`??`), except those in `.gitignore`
 
-| ค่า | พฤติกรรม |
+| Value | Behaviour |
 | --- | --- |
-| `ask` | popup ตอน Apply แสดงไฟล์ที่แก้ (15 บรรทัดแรก) และต้องติ๊ก "discard" ก่อนถึงจะกด Deploy ได้ |
-| `discard` | ทิ้งเลยไม่ถาม: `git reset --hard` + `git clean -fd` |
-| `fail` | หยุด deploy ทันที ไม่แตะอะไร |
+| `ask` | The Apply popup shows the changed files (first 15 lines) and you must tick "discard" before Deploy can be pressed |
+| `discard` | Discards without asking: `git reset --hard` + `git clean -fd` |
+| `fail` | Stops the deploy right away, touches nothing |
 
-`git clean -fd` ลบไฟล์ untracked ทิ้งจริง แต่ไม่ลบไฟล์ใน `.gitignore` (เช่น `node_modules`, `.env`) ใช้ `discard` กับโฟลเดอร์ที่ไม่มีใครแก้มือเท่านั้น
+`git clean -fd` really deletes untracked files, but not files in `.gitignore` (e.g. `node_modules`, `.env`). Only use `discard` on folders nobody edits by hand.
 
 ### build
 
-คำสั่ง bash อะไรก็ได้ รันหลัง `cd <path>` หลายบรรทัดใช้ `|` ได้ อยู่ใน `set -Eeo pipefail` คำสั่งไหนพัง = หยุด
+Any bash command, run after `cd <path>`; `|` for multiple lines. Runs under `set -Eeo pipefail`; any failing command = stop
 
 ```yaml
       build: |
@@ -334,77 +335,77 @@ GitHub: token ต้องมีสิทธิ์อ่าน repo (fine-graine
         pm2 reload ssw-icare || pm2 start npm --name ssw-icare -- start
 ```
 
-- **PATH เหมือน Terminal อัตโนมัติ** ก่อนเริ่ม แอปจะถาม PATH จาก `bash -i` (โหลด `~/.bashrc` แบบเดียวกับตอนเปิด Terminal) แล้วใช้ค่านั้น ดังนั้น Go, node/npm/pm2 จาก nvm ที่พิมพ์ใน Terminal ได้ ก็ใช้ใน deploy ได้เลย ไม่ต้องตั้งอะไรเพิ่ม
-  - ถ้า `.bashrc` มีปัญหา (error, ค้างเกิน 10 วิ) PATH จะเป็นค่าเดิมของ login shell และ deploy ยังทำงานต่อ
-  - ถ้าตั้ง `PATH=...` ไว้ในไฟล์ env ค่านั้นจะถูกใช้ทับ (ไฟล์ env โหลดทีหลัง)
-  - ยังเจอ `command not found` หรือ Go/node ผิดเวอร์ชัน: ลองเพิ่มขั้นตอน `which go node pm2; go version` แล้วเทียบกับผลใน Terminal
-- **stdin เป็น /dev/null** คำสั่งที่ถาม (y/n, รหัส) จะได้ EOF ให้ใช้ flag แบบไม่ถาม เช่น `-y`
-- สคริปต์เดิม เช่น `./ssw-icare-builder.sh` ก็เรียกตรงๆ ได้
-- ถ้าทำ `cd` ใน build ตัวต่อไปจะ `cd` กลับเอง ไม่ต้องกังวล
-- ต้องสลับ nginx (blue/green) ก็เรียกสคริปต์สลับของคุณใน build ตรงๆ เช่น `~/switch-3001.sh` (ดูตัวอย่าง 8.4)
+- **PATH matches Terminal automatically.** Before starting, the app asks `bash -i` for PATH (loads `~/.bashrc` just like opening Terminal) and uses it. So Go, node/npm/pm2 from nvm that work in Terminal also work in a deploy, nothing extra to set
+  - If `.bashrc` has a problem (error, hangs over 10 s), PATH stays the login shell's and the deploy carries on
+  - If you set `PATH=...` in the env file, that wins (the env file loads later)
+  - Still getting `command not found` or the wrong Go/node version: add a step `which go node pm2; go version` and compare with Terminal
+- **stdin is /dev/null.** Commands that prompt (y/n, passwords) get EOF; use non-interactive flags such as `-y`
+- Existing scripts like `./ssw-icare-builder.sh` can be called directly
+- If you `cd` inside build, the next target `cd`s back by itself, no worries
+- Need to switch nginx (blue/green)? Call your switch script directly in build, e.g. `~/switch-3001.sh` (see example 8.4)
 
 ### pm2
 
-แค่**รายงาน**สถานะ (`pm2 describe <ชื่อ>` บรรทัด status/version) **ไม่ restart ให้** หากไม่เจอก็แค่พิมพ์ `pm2: <ชื่อ> not found` ไม่ทำให้พัง ต้องการ reload ให้ใส่ใน `build`
+Only **reports** the status (`pm2 describe <name>`, the status/version lines) and **does not restart it**. If not found it just prints `pm2: <name> not found` and doesn't fail. To reload, put it in `build`
 
 ### mounts
 
 ```yaml
       mounts:
-        - from: /home/ict016/Document/merge-file   # ต้นทาง (path เต็มหรือ ~/)
-          to: public/merged-cache                   # ปลายทาง นับจาก path
+        - from: /home/ict016/Document/merge-file   # source (full path or ~/)
+          to: public/merged-cache                   # destination, relative to path
 ```
 
-- `to` ที่ไม่ขึ้นต้นด้วย `/` หรือ `~` นับจาก `path` ของ target
-- ก่อน checkout: ถ้า `to` เป็น mountpoint อยู่ → `umount` (ไม่งั้น git จะเห็นไฟล์จาก mount)
-- หลัง build: `mkdir -p <to>` → `mount --bind <from> <to>` → เช็คด้วย `mountpoint` ถ้าไม่ติด = พัง
-- mount แบบนี้หายเมื่อ reboot ต้อง Apply ใหม่ (หรือใส่ `/etc/fstab` เอง)
-- ให้ใส่ `to` ใน `.gitignore` ของ repo ไม่งั้นโฟลเดอร์ที่ `mkdir` สร้างจะทำให้ dirty
+- A `to` not starting with `/` or `~` is relative to the target's `path`
+- Before checkout: if `to` is a mountpoint → `umount` (otherwise git would see the mounted files)
+- After build: `mkdir -p <to>` → `mount --bind <from> <to>` → checked with `mountpoint`; not mounted = fail
+- These mounts disappear on reboot; Apply again (or add them to `/etc/fstab` yourself)
+- Put `to` in the repo's `.gitignore`, otherwise the folder made by `mkdir` makes the repo dirty
 
-## 7. ลำดับการทำงานจริง และเมื่อพัง
+## 7. The actual order of work, and failures
 
-สคริปต์ที่ compile ออกมาทำตามลำดับนี้เสมอ ไม่ว่าคุณจะเขียน key สลับที่กันใน YAML แค่ไหน:
+The compiled script always runs in this order, no matter how you order the keys in the YAML:
 
-**ส่วนหัว (ครั้งเดียว)**
+**Header (once)**
 
-1. `set -Eeo pipefail` + ตั้ง trap ERR
-2. สร้าง `~/EndFroZen/SunCurved/state/`
-3. (ถ้า `sudo: login-password`) เตรียม `sudo_cmd`
-4. (ถ้ามี `envFrom`) โหลดไฟล์ env
-5. ตั้ง `GIT_URL` และ `git_auth`
+1. `set -Eeo pipefail` + an ERR trap
+2. Create `~/EndFroZen/SunCurved/state/`
+3. (If `sudo: login-password`) set up `sudo_cmd`
+4. (If `envFrom`) load the env file
+5. Set `GIT_URL` and `git_auth`
 
-**ต่อ target (ตามลำดับใน list)**
+**Per target (in list order)**
 
-| # | ขั้นตอนใน log | ทำเมื่อ |
+| # | Step in the log | When |
 | --- | --- | --- |
-| 1 | `==> <name>: unmount` | มี `mounts` |
-| 2 | `==> <name>: checkout $TAG` | ทุกครั้ง (เช็ค dirty → fetch tag → checkout → พิมพ์ commit) |
-| 3 | `==> <name>: build` | มี `build` |
-| 4 | `==> <name>: mount` | มี `mounts` |
-| 5 | `==> <name>: pm2 <app>` | มี `pm2` |
+| 1 | `==> <name>: unmount` | Has `mounts` |
+| 2 | `==> <name>: checkout $TAG` | Always (check dirty → fetch tag → checkout → print commit) |
+| 3 | `==> <name>: build` | Has `build` |
+| 4 | `==> <name>: mount` | Has `mounts` |
+| 5 | `==> <name>: pm2 <app>` | Has `pm2` |
 
-**ท้าย:** `==> DEPLOYMENT SUCCESS` พิมพ์ Tag แล้วเขียน state `<tag> ok <วันเวลา>`
+**End:** `==> DEPLOYMENT SUCCESS`, prints the Tag and writes the state `<tag> ok <date time>`
 
-### เมื่อคำสั่งใดพัง
+### When a command fails
 
-คำสั่งแรกที่ exit ไม่เป็น 0 จะหยุดทั้งสคริปต์ทันที (target ที่เหลือไม่ถูกแตะ) แล้วพิมพ์:
+The first command with a non-zero exit stops the whole script right away (the remaining targets aren't touched) and prints:
 
 ```text
 !! FAILED at: main: build
 ```
 
-- `FAILED at` = ชื่อขั้นตอนล่าสุด (ตรงกับบรรทัด `==>` ด้านบน) เลื่อนขึ้นไปดู output ก่อนหน้านั้นเพื่อหาสาเหตุ
-- state เปลี่ยนเป็น `<tag> failed <วันเวลา>` และรายการด้านซ้ายแสดงสถานะนี้
-- **ไม่มี rollback อัตโนมัติ** — repo อาจค้างอยู่ที่ tag ใหม่ที่ build ไม่ผ่าน แก้แล้ว Apply ใหม่ (tag เดิมหรือ tag เก่าที่ใช้ได้)
-- mount ที่ถูก unmount ไปแล้วจะยังไม่ถูก mount กลับ จนกว่า Apply จะผ่านขั้น mount
+- `FAILED at` = the latest step name (matches the `==>` line above). Scroll up to the output before it to find the cause
+- The state becomes `<tag> failed <date time>` and the list on the left shows it
+- **No automatic rollback** — the repo may be left on the new tag that failed to build. Fix it and Apply again (same tag or an older working tag)
+- A mount that was unmounted stays unmounted until an Apply gets past the mount step
 
-ข้อยกเว้น: คำสั่งที่อยู่หลัง `||`, ใน `if`, หรือในฟังก์ชันที่จับ error เอง จะไม่ทำให้หยุด (ตามกฎของ bash `set -e`)
+Exception: commands after `||`, inside `if`, or in a function that handles errors itself won't stop it (bash `set -e` rules)
 
-## 8. ตัวอย่างพร้อมใช้
+## 8. Ready-to-use examples
 
-### 8.1 เล็กที่สุดที่ทำงานได้
+### 8.1 The smallest that works
 
-repo public, ไม่มี build — แค่ checkout tag:
+Public repo, no build — just check out a tag:
 
 ```yaml
 apiVersion: suncurved/v1
@@ -419,7 +420,7 @@ spec:
       path: ~/www/docs-site
 ```
 
-### 8.2 Node app + pm2, repo private
+### 8.2 Node app + pm2, private repo
 
 ```yaml
 apiVersion: suncurved/v1
@@ -442,7 +443,7 @@ spec:
       pm2: api
 ```
 
-### 8.3 ล็อก version ตายตัว
+### 8.3 Pinned version
 
 ```yaml
   source:
@@ -450,11 +451,11 @@ spec:
     version: "v2.4.1"
 ```
 
-popup ตอน Apply จะมีตัวเลือกเดียวคือ `v2.4.1`
+The Apply popup has a single choice: `v2.4.1`
 
-### 8.4 เต็มรูปแบบ — แปลงจาก ssw-icare-controller.sh
+### 8.4 Full example — converted from ssw-icare-controller.sh
 
-เทียบเท่าสคริปต์เดิม: unmount cache → checkout → สลับไป 3001 + build + สลับกลับ 3000 (ใน build) → mount → ทำ sub project ต่อ
+Equivalent to the old script: unmount cache → checkout → switch to 3001 + build + switch back to 3000 (in build) → mount → then the sub project
 
 ```yaml
 apiVersion: suncurved/v1
@@ -487,200 +488,208 @@ spec:
       pm2: ssw-icare-switch
 ```
 
-ปรับ path, ชื่อ pm2 และ path ของ mount ให้ตรงกับเครื่องจริงก่อน Apply ครั้งแรก — กดแท็บ **sh** เทียบกับสคริปต์เดิมได้ทีละบรรทัด
+Adjust the paths, pm2 names and mount paths to the real machine before the first Apply — the **sh** tab lets you compare with the old script line by line
 
-เทียบสิ่งที่เปลี่ยนจากสคริปต์เดิม:
+What changed from the old script:
 
-| สคริปต์เดิม | ตอนนี้ |
+| Old script | Now |
 | --- | --- |
-| token ใส่ใน URL ของ git | credential helper อ่านจาก env ตอนรัน |
-| `echo $SUDO_PASSWORD \| sudo -S` จากไฟล์ env | รหัส login ที่เก็บใน Credential Manager ส่งผ่าน stdin |
-| `read -p` เลือก tag ใน terminal | popup เลือก tag ในแอป |
-| ถาม y/n ตอน dirty | checkbox ใน popup |
+| Token in the git URL | Credential helper reads it from env at run time |
+| `echo $SUDO_PASSWORD \| sudo -S` from the env file | Login password from Credential Manager, passed via stdin |
+| `read -p` to pick a tag in the terminal | Tag picker popup in the app |
+| y/n prompt when dirty | Checkbox in the popup |
 
-## 9. ใช้ editor ในแอป
+## 9. Using the editor in the app
 
-เข้าเครื่อง → ปุ่ม **Deploy** → หน้า Deploy: ด้านซ้ายเป็นรายการ deployment บนเครื่องนั้น (พร้อมสถานะ ok / failed / never) ด้านขวาเป็น editor และ log
+Open a machine → **Deploy** button → the Deploy page: the left side lists the deployments on that machine (with ok / failed / never status), the right side is the editor and the log
 
-### โหมดง่าย (ฟอร์ม) กับโหมด YAML
+### Form mode and YAML mode
 
-ปุ่ม **[ ง่าย | YAML ]** บนแถบเครื่องมือใช้สลับวิธีแก้ ทั้งสองโหมดแก้ไฟล์เดียวกัน แก้ในฟอร์มแล้ว YAML เปลี่ยนตามทันที แอปจำโหมดล่าสุดที่ใช้ไว้ให้
+The **[ Form | YAML ]** buttons on the toolbar switch how you edit. Both edit the same file; changes in the form update the YAML right away. The app remembers the mode you used last
 
-| ในฟอร์ม | ได้ใน YAML |
+| In the form | In the YAML |
 | --- | --- |
-| ปุ่มโฟลเดอร์ข้างช่อง Path / ไฟล์ env / mount | เปิดหน้าต่างเลือกโฟลเดอร์หรือไฟล์บนเครื่อง ได้ path แบบ `~/...` |
-| **+ คำสั่ง** / **+ unmount** / **+ mount** / **+ pm2** / **+ if** / **+ หยุด** | เพิ่มขั้นตอนใน `steps` (mount/unmount เปิด sudo ให้อัตโนมัติ) if มีรายการ "ถ้าผ่าน" / "ถ้าไม่ผ่าน" ของตัวเอง |
-| **+ สคริปต์ .sh** | เลือกไฟล์บนเครื่องแล้วเพิ่มเป็นขั้น `run` (ถ้าอยู่ใน path ของ target จะได้ `./ชื่อไฟล์`) |
-| ลากป้ายหน้าขั้นตอน | เรียงลำดับขั้นตอนใหม่ (หรือใช้ลูกศรขึ้น/ลงที่โผล่ตอนชี้) |
-| **+ เพิ่ม target** | เพิ่ม project ถัดไปใน `targets` |
-| ช่องชื่อ process ของ pm2 | มีรายชื่อจาก `pm2 jlist` บนเครื่องให้เลือก ถ้าเครื่องไม่ได้ติดตั้ง pm2 ปุ่ม **+ pm2** จะกดไม่ได้ และแถว pm2 ที่มีอยู่จะขึ้นเตือนสีแดง (ไม่ไปเปิด pm2 daemon ให้) |
-| ติ๊ก Repo private | ใส่ `auth` ช่อง user/token มีรายชื่อตัวแปรจากไฟล์ env ให้เลือก (อ่านแค่ชื่อ ไม่อ่านค่า) |
+| Folder button next to Path / Env file / mount | Opens a folder or file picker on the machine, gives a `~/...` path |
+| **+ command** / **+ unmount** / **+ mount** / **+ pm2** / **+ if** / **+ stop** | Adds a step to `steps` (mount/unmount turn on sudo automatically); an if has its own "if pass" / "if fail" lists |
+| **+ script .sh** | Pick a file on the machine and add it as a `run` step (inside the target's path you get `./filename`) |
+| Drag the label in front of a step | Reorder the steps (or use the up/down arrows that appear on hover) |
+| **+ Add target** | Adds the next project to `targets` |
+| pm2 process name field | Offers names from `pm2 jlist` on the machine. If pm2 isn't installed, **+ pm2** is disabled and existing pm2 rows show a red warning (it won't start the pm2 daemon for you) |
+| Tick Repo private | Adds `auth`; the user/token fields offer variable names from the env file (reads names only, never values) |
 
-- ช่องที่ผิดจะมีกรอบสีแดง และมีข้อความบอกใต้แถบเครื่องมือเหมือนโหมด YAML
-- comment ที่เขียนไว้ใน YAML ยังอยู่ ยกเว้นของที่ลบทิ้งในฟอร์ม
-- ถ้า YAML พิมพ์ผิดจนอ่านไม่ได้ (เช่นย่อหน้าเพี้ยน) จะเปิดโหมดง่ายไม่ได้ ต้องแก้ในโหมด YAML ก่อน
-- ช่องว่างในฟอร์ม = ไม่ใส่ key นั้นใน YAML
+- Invalid fields get a red border, and the message shows under the toolbar just like YAML mode
+- Comments in the YAML are kept, except on things you delete in the form
+- If the YAML is broken beyond reading (e.g. bad indentation), the form can't open; fix it in YAML mode first
+- An empty field in the form = that key is left out of the YAML
 
-### คำแนะนำอัตโนมัติ
+### Autocomplete
 
-คำแนะนำรู้ว่า cursor อยู่ตรงไหนในโครงสร้าง (ดูจากการย่อหน้า) และเสนอเฉพาะ key ที่ใช้ได้ตรงนั้น
+Autocomplete knows where the cursor is in the structure (from the indentation) and only offers keys that are valid there
 
-| ทำ | ได้ |
+| Do | Get |
 | --- | --- |
-| พิมพ์ตัวอักษรต้นบรรทัด | รายชื่อ key ของระดับนั้น พร้อมคำอธิบาย |
-| พิมพ์ ` key:  ` (หลังช่องว่าง) | ค่าที่ใช้ได้ เช่น `sudo:` → login-password / none, `dirty:` → ask / discard / fail |
-| **Ctrl+Space** บนบรรทัดว่าง | เปิดรายการเอง (บรรทัดว่างจะไม่เด้งเอง ไม่กวนตอนพิมพ์) |
-| ↑ ↓ แล้ว Enter | ใส่คำที่เลือก / Esc ปิด |
+| Type a letter at the start of a line | The keys for that level, with descriptions |
+| Type `key: ` (after the space) | Valid values, e.g. `sudo:` → login-password / none, `dirty:` → ask / discard / fail |
+| **Ctrl+Space** on an empty line | Opens the list yourself (empty lines don't pop it up, so it doesn't get in the way) |
+| ↑ ↓ then Enter | Inserts the selection / Esc closes |
 
-### Snippet
+### Snippets
 
-คำที่มีป้าย `snippet` ใส่ทั้งก้อนพร้อมช่องให้กรอก กด **Tab** กระโดดไปช่องถัดไป:
+Entries labelled `snippet` insert a whole block with fields to fill; **Tab** jumps to the next field:
 
-- `- target` — ใน `targets:` ใส่ target ใหม่พร้อม name / path
-- `- mount` — ใน `mounts:` ใส่ from / to
-- `metadata`, `spec`, `source`, `targets` ฯลฯ — ใส่ key พร้อมโครงข้างใน
+- `- target` — in `targets:`, a new target with name / path
+- `- mount` — in `mounts:`, from / to
+- `metadata`, `spec`, `source`, `targets` etc. — the key with its inner structure
 
-### ปุ่มลัด
+### Shortcuts
 
-| ปุ่ม | ทำ |
+| Key | Does |
 | --- | --- |
-| Tab / Shift+Tab | ย่อ / ถอยหน้า 2 ช่อง (เลือกหลายบรรทัดได้) |
-| Ctrl+/ | เปิด/ปิด comment |
-| Ctrl+F | ค้นหา / แทนที่ |
-| Ctrl+Z / Ctrl+Shift+Z | undo / redo |
-| Alt+↑ / Alt+↓ | ย้ายบรรทัด |
+| Tab / Shift+Tab | Indent / outdent 2 spaces (works on several lines) |
+| Ctrl+/ | Toggle comment |
+| Ctrl+F | Find / replace |
+| Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
+| Alt+↑ / Alt+↓ | Move line |
+| Ctrl+S | Save (without deploying) |
 
-### ตรวจทันทีที่พิมพ์
+### Checked as you type
 
-ทุกครั้งที่แก้ แอปรันตัวตรวจตัวเดียวกับตอน Apply แล้วแสดง error สีแดงใต้แถบเครื่องมือ (ดูความหมายในหัวข้อ 10) ไม่มี error = พร้อม Apply
+On every edit the app runs the same validator as Apply and shows red errors under the toolbar (meanings in section 10). No error = ready to Apply
 
-### แถบเครื่องมือ
+### Toolbar
 
-`ฟอร์ม | YAML ┆ Flow | sh`   📖   ⋯   **Apply**
+`Form | YAML ┆ Flow | sh`   📖   ⋯   **Save**   **Apply**
 
-| ส่วน | ทำ |
+| Part | Does |
 | --- | --- |
-| **ฟอร์ม** / **YAML** | โหมดแก้ไข (จำไว้ว่าชอบแบบไหน) |
-| **Flow** | ดูขั้นตอนเป็นแผนผัง 3D (isometric: บล็อกต่อด้วยท่อ, if แตกเป็นสองทาง) หรือสลับเป็น "รายการ" ได้มุมขวาบน คลิกบล็อกดูคำสั่ง กด Simulate ได้ ตอน Apply จะติดไฟตาม |
-| **sh** | สคริปต์ bash ที่จะรันจริง (อ่านอย่างเดียว) tag แสดงเป็น `<chosen at deploy>` รหัส sudo แสดงเป็น `********` กด ฟอร์ม/YAML เพื่อกลับไปแก้ |
-| 📖 | คู่มือนี้ |
-| ⋯ | **Save sh ลงเครื่อง** และ **ลบ deployment นี้** (กดสองครั้งเพื่อยืนยัน) |
-| **Apply** | deploy ตัวที่เปิดอยู่ |
+| **Form** / **YAML** | Edit mode (remembers which you prefer) |
+| **Flow** | Shows the steps as a 3D diagram (isometric: blocks joined by pipes, an if splits in two), or switch to "List" at the top right. Click a block to see its commands, press Simulate; lights up during Apply |
+| **sh** | The bash script that will really run (read only). The tag shows as `<chosen at deploy>`, the sudo password as `********`. Press Form/YAML to go back to editing |
+| 📖 | This manual |
+| ⋯ | **Save sh to the machine** and **Delete this deployment** (click twice to confirm) |
+| **Save** | Saves the YAML without deploying, even if unfinished (only `metadata.name` must be valid) |
+| **Apply** | Deploys the open one |
 
-### Apply หลายตัว (คิว)
+### Apply several (queue)
 
-ในรายการ Deployments ด้านซ้าย เอาเมาส์ไปชี้แล้วกดวงกลมหน้าชื่อเพื่อเลือก ตัวเลขในวงกลม = ลำดับที่จะรัน (ตามลำดับที่กด) ด้านล่างจะมีแถบคิว:
+In the Deployments list on the left, hover and click the circle in front of a name to pick it. The number in the circle = the run order (the order you clicked). A queue bar appears at the bottom:
 
-- **ทั้งหมด** / **ล้าง** — เลือกทุกตัว / เอาออกหมด
-- **ถ้าตัวไหนพัง** — **หยุดคิว** (ตัวที่เหลือไม่รัน) หรือ **ข้ามไปตัวถัดไป** (จำค่าไว้)
-- **Apply N ตัวตามลำดับ**
+- **All** / **Clear** — pick all / remove all
+- **On failure** — **Stop the queue** (the rest don't run) or **Skip to the next one** (remembered)
+- **Apply N in order**
 
-ขั้นแรกจะถาม popup (เลือก tag / discard) ของ**ทุกตัวให้ครบก่อน** หัว popup บอกลำดับ เช่น `[2/3]` กด Cancel = ข้ามตัวนั้น จากนั้นรัน**ทีละตัว**ต่อกันเอง ไม่ต้องเฝ้า วงกลมเปลี่ยนสีตามผล (ส้ม = กำลังรัน, เขียว = สำเร็จ, แดง = ล้มเหลว, จาง = ไม่ได้รัน) และ log จบด้วยสรุป `queue done: …`
+First it asks the popups (pick tag / discard) for **every one up front**; the popup title shows the position, e.g. `[2/3]`. Cancel = skip that one. Then it runs them **one by one** on its own, no need to watch. The circles change colour with the result (orange = running, green = ok, red = failed, faded = not run) and the log ends with a summary `queue done: …`
 
-- ตัวที่เปิดอยู่ในตัวแก้ ใช้เนื้อหาในตัวแก้ (บันทึกให้ก่อนเหมือน Apply) และหน้า Flow จะติดไฟตอนถึงคิวมัน ตัวอื่นใช้ไฟล์ที่บันทึกไว้บนเครื่อง
-- รันทีละตัวเพราะเครื่องเดียวรันคำสั่งได้ทีละอัน (build พร้อมกันยังแย่ CPU/RAM กันด้วย) คนละเครื่อง (คนละแท็บ) Apply พร้อมกันได้
+- The one open in the editor uses the editor's content (saved first, like Apply), and the Flow lights up when its turn comes. The others use the file saved on the machine
+- One at a time because a machine runs one command at a time (parallel builds would also fight over CPU/RAM). Different machines (different tabs) can Apply at the same time
 
-### Apply — สิ่งที่เกิดขึ้น
+### If the connection drops
 
-1. ตรวจ YAML (ผิด = ไม่ส่งอะไรเลย)
-2. บันทึกไฟล์ไป `~/EndFroZen/SunCurved/deployments/<name>.yaml`
-3. precheck: ดึงรายการ tag + เช็ค target ที่ dirty
-4. popup: เลือก tag (บนสุด = latest) และติ๊ก discard สำหรับ target ที่ `dirty: ask` — กด Cancel ได้ (ไฟล์ถูกบันทึกไปแล้วแต่ไม่ได้รัน)
-5. สร้างสคริปต์จริง ส่งเข้า `bash -l -s` บนเครื่องนั้น
-6. log ไหลเข้ามาแบบสด: บรรทัด `==>` = ขั้นตอน, `!!` = พัง (สีแดง)
+Apply and the queue run **on the machine**, not in the app: the whole queue is started there up front (each one waits for the one before, and "On failure" is checked there too), so closing the app or losing the network doesn't stop it. Each run's output goes to `~/EndFroZen/SunCurved/run/<name>/log`.
+
+Reconnect, and a deployment still going shows `deploying… (open to watch)` in the list; click it and the log and Flow replay from the start and keep following. `deploy failed (stopped without finishing)` = the run was killed or the machine restarted. The machine needs `setsid` and GNU `tail` (any normal Linux; not Alpine/busybox).
+
+### Apply — what happens
+
+1. Validate the YAML (invalid = nothing is sent)
+2. Save the file to `~/EndFroZen/SunCurved/deployments/<name>.yaml`
+3. Precheck: fetch the tag list + check which targets are dirty
+4. Popup: pick a tag (top = latest) and tick discard for targets with `dirty: ask` — Cancel works (the file is already saved but nothing runs)
+5. Build the real script, pipe it into `bash -l -s` on that machine
+6. The log streams in live: `==>` lines = steps, `!!` = failure (red)
 
 ### Save sh
 
-เขียนสคริปต์ไปที่ `~/EndFroZen/SunCurved/scripts/<name>.sh` (`chmod 700` อ่าน/รันได้แค่ user นั้น) เพื่อเอาไปรันเองใน Terminal:
+Writes the script to `~/EndFroZen/SunCurved/scripts/<name>.sh` (`chmod 700`, only that user can read/run it) so you can run it yourself in Terminal:
 
 ```bash
-~/EndFroZen/SunCurved/scripts/<name>.sh v1.2.0    # version: tag ต้องใส่ tag
-~/EndFroZen/SunCurved/scripts/<name>.sh           # branch หรือ tag ที่ล็อกไว้
+~/EndFroZen/SunCurved/scripts/<name>.sh v1.2.0    # version: tag needs a tag
+~/EndFroZen/SunCurved/scripts/<name>.sh           # branch or pinned tag
 ```
 
-ต่างจากตอน Apply:
-- **ไม่มีรหัส sudo ในไฟล์** — mount/unmount จะให้ sudo ถามรหัสใน Terminal เอง
-- `dirty: ask` จะถาม `discard these changes in main? [y/N]` ใน Terminal
-- PATH ได้จาก `~/.bashrc` เหมือนตอนกด Deploy
-- output อยู่ใน Terminal ไม่ขึ้นใน Deploy log และหน้า Flow ไม่ติดไฟ แต่ state ยังถูกบันทึกเหมือนเดิม
-- กด ⋯ → Save sh ใหม่ทุกครั้งที่แก้ YAML ไฟล์เดิมไม่อัปเดตเอง
+Differences from Apply:
+- **No sudo password in the file** — mount/unmount let sudo ask for the password in Terminal
+- `dirty: ask` asks `discard these changes in main? [y/N]` in Terminal
+- PATH comes from `~/.bashrc`, same as Deploy
+- Output stays in Terminal, not the Deploy log, and the Flow doesn't light up, but the state is still recorded
+- Press ⋯ → Save sh again after every YAML change; the old file doesn't update itself
 
-### ลบ deployment (⋯ → ลบ deployment นี้)
+### Delete a deployment (⋯ → Delete this deployment)
 
-ลบเฉพาะไฟล์ของ Sun Curved (`deployments/<name>.yaml`, `state/<name>` และ `scripts/<name>.sh`) **ไม่แตะโฟลเดอร์ project, mount หรือ pm2**
+Deletes only Sun Curved's files (`deployments/<name>.yaml`, `state/<name>` and `scripts/<name>.sh`). **Does not touch the project folder, mounts or pm2**
 
-## 10. Error ทั้งหมดและวิธีแก้
+## 10. All errors and how to fix them
 
-### Error ตอนเขียน (แสดงใต้แถบเครื่องมือ)
+### Errors while writing (shown under the toolbar)
 
-| ข้อความ | สาเหตุ | แก้ |
+| Message | Cause | Fix |
 | --- | --- | --- |
-| `YAML: ...` | ไวยากรณ์ YAML ผิด เช่น ใช้ Tab, ย่อหน้าไม่ตรง, ลืมช่องว่างหลัง `:`, key ซ้ำ | ดูข้อความต่อท้ายที่บอกบรรทัด/คอลัมน์ แล้วดูหัวข้อ 2 |
-| `apiVersion must be "suncurved/v1"` | ไม่มีหรือพิมพ์ผิด | `apiVersion: suncurved/v1` |
-| `kind must be "Deployment"` | ไม่มีหรือพิมพ์ผิด (ตัว D ใหญ่) | `kind: Deployment` |
-| `metadata.name: lowercase letters, digits and '-' only` | ไม่มีชื่อ หรือมีตัวใหญ่ / `_` / ช่องว่าง | เช่น `my-app` |
-| `spec.sudo must be "login-password" or "none"` | ค่าอื่น เช่น `yes` | เลือกหนึ่งในสองค่า |
-| `spec.source.repo is required` | ไม่มี `source.repo` | ใส่ repo |
-| `spec.source.auth: user/token must be env var names` | ใส่ค่า token จริงหรือชื่อที่มี `-` | ใส่ชื่อตัวแปรใน envFrom เช่น `GITHUB_TOKEN` |
-| `spec.source: use either version (tags) or branch (git pull), not both` | ใส่ทั้ง version และ branch | เลือกอย่างเดียว |
-| `spec.source.branch: not a valid branch name` | ชื่อ branch มีช่องว่างหรือตัวอักษรแปลก | เช่น `main`, `release/1.x` |
-| `spec.targets: at least one target` | ไม่มี `targets` หรือว่าง | เพิ่ม `- name: ... path: ...` |
-| `spec.targets[0].name: ...` | target ไม่มีชื่อหรือชื่อผิดกฎ | กฎเดียวกับ metadata.name |
-| `spec.targets[0].dirty: ask \| discard \| fail` | ค่าผิด | เลือกหนึ่งในสาม |
-| `spec.targets[0].mounts need spec.sudo: login-password` | มี mounts แต่ sudo เป็น none | ตั้ง `sudo: login-password` |
-| `spec.targets[0].path is required` | ไม่มี path | ใส่ path |
-| `spec.targets[0].mounts[0].from is required` (หรือ `to`) | mount ไม่ครบ | ใส่ทั้ง from และ to |
+| `YAML: ...` | YAML syntax error, e.g. Tab, misaligned indentation, missing space after `:`, duplicate key | The message ends with the line/column; see section 2 |
+| `apiVersion must be "suncurved/v1"` | Missing or misspelt | `apiVersion: suncurved/v1` |
+| `kind must be "Deployment"` | Missing or misspelt (capital D) | `kind: Deployment` |
+| `metadata.name: lowercase letters, digits and '-' only` | No name, or has uppercase / `_` / spaces | e.g. `my-app` |
+| `spec.sudo must be "login-password" or "none"` | Some other value, e.g. `yes` | Pick one of the two |
+| `spec.source.repo is required` | No `source.repo` | Add the repo |
+| `spec.source.auth: user/token must be env var names` | Put the real token or a name with `-` | Use variable names from envFrom, e.g. `GITHUB_TOKEN` |
+| `spec.source: use either version (tags) or branch (git pull), not both` | Both version and branch set | Pick one |
+| `spec.source.branch: not a valid branch name` | Branch name has spaces or odd characters | e.g. `main`, `release/1.x` |
+| `spec.targets: at least one target` | No `targets` or empty | Add `- name: ... path: ...` |
+| `spec.targets[0].name: ...` | Target has no name or breaks the rules | Same rules as metadata.name |
+| `spec.targets[0].dirty: ask \| discard \| fail` | Wrong value | Pick one of the three |
+| `spec.targets[0].mounts need spec.sudo: login-password` | Has mounts but sudo is none | Set `sudo: login-password` |
+| `spec.targets[0].path is required` | No path | Add a path |
+| `spec.targets[0].mounts[0].from is required` (or `to`) | Incomplete mount | Set both from and to |
 
-`[0]` = ลำดับเริ่มจาก 0 คือ target ตัวแรก, `[1]` คือตัวที่สอง
+`[0]` = counting from 0, i.e. the first target; `[1]` is the second
 
-### Error ตอน Apply
+### Errors on Apply
 
-| เห็นใน log | สาเหตุที่พบบ่อย | แก้ |
+| Seen in the log | Usual cause | Fix |
 | --- | --- | --- |
-| `no tags found` | repo ไม่มี tag, URL ผิด, หรือ auth ไม่ผ่าน | push tag; เช็ค repo; เช็คตัวแปรใน envFrom |
-| `No such file or directory` บรรทัดแรก | ไฟล์ `envFrom` ไม่มี | สร้างไฟล์หรือแก้ path |
-| FAILED at `<name>: checkout` + `not discarding` | dirty และไม่ได้เลือก discard | commit/stash เอง หรือติ๊ก discard |
-| FAILED at `checkout` + `cd: ... No such file` | path ไม่มี / ยังไม่ clone | clone ก่อน (หัวข้อ 6) |
-| FAILED at `checkout` + `Authentication failed` | token ผิด/หมดอายุ/ไม่มีสิทธิ์ | ออก token ใหม่ใส่ในไฟล์ env |
-| FAILED at `checkout` + `couldn't find remote ref` | tag ไม่มีบน remote | `git push origin <tag>` |
-| FAILED at `build` + `command not found` | ไม่มี node/npm/pm2 แม้ใน Terminal | ติดตั้งให้พิมพ์ใน Terminal ได้ก่อน (deploy ใช้ PATH เดียวกับ Terminal) |
-| FAILED at `unmount`/`mount` + `incorrect password` | รหัส sudo ไม่ตรงกับรหัส login ที่เก็บ | แก้รหัสด้วยปุ่ม ✎ หรือใช้ NOPASSWD |
-| FAILED at `pull <branch>` + `Not possible to fast-forward` | branch บนเครื่อง diverged จาก remote | แก้ใน Terminal เช่น `git reset --hard origin/<branch>` |
-| `mount failed: ...` | from ไม่มีอยู่ | สร้างโฟลเดอร์ต้นทาง |
-| FAILED at `build` + `Permission denied` | สคริปต์ที่เรียกใน build ไม่มีสิทธิ์รัน | `chmod +x` |
+| `no tags found` | Repo has no tags, wrong URL, or auth failed | Push a tag; check the repo; check the envFrom variables |
+| `No such file or directory` on the first line | The `envFrom` file doesn't exist | Create it or fix the path |
+| FAILED at `<name>: checkout` + `not discarding` | Dirty and discard wasn't picked | Commit/stash yourself or tick discard |
+| FAILED at `checkout` + `cd: ... No such file` | path doesn't exist / not cloned yet | Clone first (section 6) |
+| FAILED at `checkout` + `Authentication failed` | Token wrong/expired/no access | Issue a new token in the env file |
+| FAILED at `checkout` + `couldn't find remote ref` | Tag not on the remote | `git push origin <tag>` |
+| FAILED at `build` + `command not found` | No node/npm/pm2 even in Terminal | Install it so it works in Terminal first (deploy uses the same PATH as Terminal) |
+| FAILED at `unmount`/`mount` + `incorrect password` | sudo password doesn't match the saved login password | Fix the password with the ✎ button or use NOPASSWD |
+| FAILED at `pull <branch>` + `Not possible to fast-forward` | Local branch diverged from the remote | Fix it in Terminal, e.g. `git reset --hard origin/<branch>` |
+| `mount failed: ...` | from doesn't exist | Create the source folder |
+| FAILED at `build` + `Permission denied` | A script called in build isn't executable | `chmod +x` |
 
-## 11. ความปลอดภัย ข้อจำกัด และคำถามที่พบบ่อย
+## 11. Security, limitations and FAQ
 
-### ความปลอดภัย
+### Security
 
-- รหัสผ่าน connection อยู่ใน **Windows Credential Manager** เท่านั้น ไม่อยู่ใน sqlite ไม่อยู่ใน YAML
-- รหัส sudo ส่งเข้าสคริปต์ทาง stdin ไม่อยู่ใน command line (`ps` มองไม่เห็น) และไม่ถูกเขียนลงดิสก์บนเครื่องปลายทาง
-- git token อยู่ในไฟล์ env บนเครื่องปลายทาง ใช้ผ่าน credential helper ไม่อยู่ใน URL ไม่อยู่ใน `.git/config`
-- รหัส 2FA พิมพ์เองทุกครั้ง ไม่ถูกเก็บ
-- YAML ถูกเก็บเป็นข้อความธรรมดาบนเครื่องปลายทาง — **ห้ามใส่ความลับใน YAML** ใส่ในไฟล์ env แล้ว `chmod 600`
-- `build` คือคำสั่ง shell เต็มรูปแบบ ใครแก้ YAML ได้ = รันคำสั่งอะไรก็ได้ในนาม user นั้น
+- Connection passwords live only in **Windows Credential Manager**, not in sqlite and not in the YAML
+- The sudo password reaches the script via stdin, not the command line (invisible to `ps`), and is never written to disk on the target machine
+- The git token lives in the env file on the target machine and is used through a credential helper; never in the URL or in `.git/config`
+- 2FA codes are typed every time and never stored
+- The YAML is stored as plain text on the target machine — **never put secrets in the YAML**; put them in the env file and `chmod 600` it
+- `build` is a full shell command: whoever can edit the YAML can run anything as that user
 
-### ข้อจำกัดตอนนี้
+### Current limitations
 
-- ระหว่าง deploy terminal ของเครื่องนั้นจะค้างจนกว่าจะเสร็จ (ใช้ connection เดียวกัน)
-- ยังไม่มีปุ่มยกเลิกกลางทาง
-- build ถามคำถามไม่ได้ (stdin = /dev/null)
-- `sudo: login-password` ใช้ได้เมื่อรหัส sudo = รหัส login เท่านั้น
-- deploy ได้จาก tag หรือ branch (git pull), repo เดียวต่อ deployment
-- ไม่มี rollback อัตโนมัติ, ไม่ clone ให้, ไม่ restart pm2 ให้ (ใส่ใน build)
+- While the app is watching a deploy, that machine's terminal is blocked until it finishes (same connection)
+- No cancel button mid-way yet
+- build can't answer prompts (stdin = /dev/null)
+- `sudo: login-password` only works when the sudo password = the login password
+- Deploys from a tag or a branch (git pull), one repo per deployment
+- No automatic rollback, no cloning, no pm2 restart for you (put it in build)
 
 ### FAQ
 
-**มีไฟล์ .sh ถูกสร้างบนเครื่องไหม?** ตอน Apply ไม่มี สคริปต์ถูกส่งผ่าน stdin เข้า `bash -l -s` ตรงๆ แล้วหายไป ดูได้จากแท็บ sh จะมีไฟล์ก็ต่อเมื่อกด **⋯ → Save sh ลงเครื่อง** เอง
+**Is a .sh file created on the machine?** Not on Apply. The script is piped via stdin straight into `bash -l -s` and then gone; you can view it in the sh tab. A file only exists if you press **⋯ → Save sh to the machine** yourself
 
-**ทำไมห่อสคริปต์ด้วย `{ ... } < /dev/null`?** เพื่อให้ bash อ่านสคริปต์ทั้งหมดก่อนรัน และกันไม่ให้คำสั่งใน build (เช่น อะไรที่อ่าน stdin) กินส่วนที่เหลือของสคริปต์ไป
+**Why wrap the script in `{ ... } < /dev/null`?** So bash reads the whole script before running it, and so commands in build (anything that reads stdin) can't eat the rest of the script
 
-**rollback ยังไง?** Apply ใหม่แล้วเลือก tag เก่าที่ใช้ได้ใน popup
+**How do I roll back?** Apply again and pick an older working tag in the popup
 
-**มีหลาย server deploy โปรเจกต์เดียวกัน?** สร้าง deployment ชื่อเดียวกันในแต่ละเครื่อง ไฟล์แยกกันต่อเครื่อง
+**Several servers deploy the same project?** Create a deployment with the same name on each machine; the files are separate per machine
 
-**แก้ YAML บนเครื่องปลายทางเองได้ไหม?** ได้ แก้ `~/EndFroZen/SunCurved/deployments/<name>.yaml` แล้วกด refresh ในแอป
+**Can I edit the YAML on the target machine myself?** Yes, edit `~/EndFroZen/SunCurved/deployments/<name>.yaml` and press refresh in the app
 
-**อยากรันขั้นตอนที่ไม่มีใน schema?** ใส่ใน `build` ได้ทุกอย่างที่ bash ทำได้
+**Want a step that isn't in the schema?** Put it in `build`; anything bash can do
 
-**ดูว่า deploy ล่าสุดคือ tag อะไร?** ดูสถานะข้างชื่อในรายการด้านซ้าย หรือ `cat ~/EndFroZen/SunCurved/state/<name>`
+**What tag was deployed last?** See the status next to the name in the list on the left, or `cat ~/EndFroZen/SunCurved/state/<name>`
