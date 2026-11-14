@@ -357,3 +357,163 @@ label.easy-bad .ez-chip { color: var(--color-red-400); border-color: #ef4444; }
 .cal-md a { color: var(--color-amber-400); text-decoration: underline; }
 .cal-md input[type=checkbox] { accent-color: var(--color-amber-500); cursor: pointer; margin-right: .3rem; vertical-align: -1px; }
 .cal-md li:has(> input:checked) { text-decoration: line-through; opacity: .55; }
+
+/* Notepad page: an A4 sheet on the desk (portrait 210x297mm, landscape 297x210mm); it grows with the text */
+.np-paper {
+  display: block;
+  box-sizing: border-box;
+  width: 210mm;
+  min-height: 297mm;
+  margin: 0 auto;
+  border-radius: 2px;
+  padding: 72px 72px 96px;
+  background-color: #fff;
+  color: #27272a;
+  box-shadow: 0 1px 2px rgb(0 0 0 / .08), 0 10px 30px rgb(0 0 0 / .14);
+}
+.np-paper[data-orient="landscape"] { width: 297mm; min-height: 210mm; }
+/* tiny previews in the New dialog: a real page scaled down */
+.np-mini { zoom: .085; height: 297mm; padding-bottom: 0; flex-shrink: 0; box-shadow: 0 2px 10px rgb(0 0 0 / .35); }
+.np-mini[data-orient="landscape"] { height: 210mm; }
+
+/* paper styles: a line under every 24px text row, starting at the 72px top margin */
+.np-paper[data-paper="lined"] {
+  background-image: linear-gradient(transparent 23px, rgb(161 161 170 / .4) 23px);
+  background-size: 100% 24px;
+  background-position: 0 72px;
+  background-clip: content-box; /* lines only between the side margins */
+}
+.np-paper[data-paper="ruled"] { /* lines edge to edge, blank header, red margin line */
+  background-image:
+    linear-gradient(90deg, transparent 52px, rgb(239 68 68 / .6) 52px, rgb(239 68 68 / .6) 54px, transparent 54px),
+    linear-gradient(#fff, #fff),
+    linear-gradient(transparent 23px, rgb(161 161 170 / .4) 23px);
+  background-size: 100% 100%, 100% 72px, 100% 24px;
+  background-position: 0 0, 0 0, 0 72px;
+  background-repeat: no-repeat, no-repeat, repeat;
+}
+.np-paper[data-paper="dots"] {
+  background-image: radial-gradient(circle, rgb(113 113 122 / .5) 1px, transparent 1.4px);
+  background-size: 24px 24px;
+  background-position: 0 84px;
+  background-clip: content-box;
+}
+
+/* Notepad's live Markdown editor on the white page: dark ink, rows on the 24px line grid */
+#np-text, .np-ink {
+  --color-zinc-100: #18181b; --color-zinc-200: #27272a; --color-zinc-400: #71717a; --color-zinc-500: #a1a1aa;
+  --color-zinc-600: #a1a1aa; --color-zinc-700: #d4d4d8; --color-zinc-800: #e4e4e7; --color-zinc-950: #f4f4f5; --color-amber-400: #d97706;
+  cursor: text;
+}
+#np-text .cm-editor { height: auto; }
+#np-text .cm-scroller { line-height: 24px; overflow: visible; font-family: var(--np-font, "Space Mono", "Noto Sans Thai Looped", monospace); }
+#np-text .cm-content { padding: 0; }
+#np-text .cm-line { padding: 0; }
+/* Notion-style block handle in the left margin, and the drop line while dragging (see blocks.ts) */
+#np-text .cm-bhandle { position: absolute; left: -56px; display: none; height: 24px; align-items: center; gap: 2px; z-index: 5; }
+#np-text .cm-bhandle button { display: grid; place-items: center; width: 22px; height: 24px; border-radius: 4px; color: #a1a1aa; }
+#np-text .cm-bhandle button:hover { background: #f4f4f5; color: #52525b; }
+#np-text .cm-bhandle [data-grip] { cursor: grab; width: 18px; }
+#np-text .cm-bdrop { position: absolute; left: 0; right: 0; display: none; height: 3px; margin-top: -1.5px; border-radius: 2px; background: rgb(59 130 246 / .6); pointer-events: none; }
+
+/* "/" block menu (autocomplete popup with tooltipClass np-slash): a white Notion-like card */
+.cm-tooltip.cm-tooltip-autocomplete.np-slash {
+  overflow: hidden; padding: 4px; border: 1px solid #e4e4e7; border-radius: 12px; background: #fff;
+  box-shadow: 0 0 0 1px rgb(15 15 15 / .04), 0 4px 8px rgb(15 15 15 / .08), 0 12px 32px rgb(15 15 15 / .16);
+}
+.np-slash.cm-tooltip-autocomplete > ul {
+  width: 320px; max-height: 360px !important; font-family: inherit !important; scrollbar-width: thin; scrollbar-color: #d4d4d8 transparent;
+}
+.np-slash.cm-tooltip-autocomplete > ul > completion-section {
+  display: block; padding: 6px 10px 6px; border: 0; color: #a1a1aa; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; opacity: 1;
+}
+.np-slash.cm-tooltip-autocomplete > ul > li {
+  padding: 5px 8px !important; border-radius: 8px; color: #27272a !important; background: none !important; cursor: pointer;
+}
+.np-slash.cm-tooltip-autocomplete > ul > li:hover { background: #f4f4f5 !important; }
+.np-slash.cm-tooltip-autocomplete > ul > li[aria-selected] { background: #f4f4f5 !important; }
+.np-slash .cm-completionLabel, .np-slash .cm-completionDetail { display: none; } /* the row below shows them */
+.np-slash .np-row { display: flex; align-items: center; gap: 12px; }
+.np-slash .np-ic {
+  display: grid; place-items: center; flex-shrink: 0; width: 40px; height: 40px;
+  border: 1px solid #e4e4e7; border-radius: 8px; background: #fff; color: #3f3f46; box-shadow: 0 1px 2px rgb(0 0 0 / .05);
+}
+.np-slash li[aria-selected] .np-ic { border-color: #d4d4d8; }
+.np-slash .np-tx { display: flex; flex: 1; min-width: 0; flex-direction: column; line-height: 1.3; }
+.np-slash .np-t { font-size: 14px; font-weight: 500; }
+.np-slash .np-d { overflow: hidden; color: #a1a1aa; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.np-slash .np-k { flex-shrink: 0; padding: 1px 6px; border-radius: 4px; background: #f4f4f5; color: #71717a; font: 11px 'Cascadia Mono', Consolas, monospace; }
+#np-text .cm-content::after { content: ""; display: block; clear: both; } /* a floated picture at the end still grows the page */
+
+/* picture toolbar: pops out at the mouse on right-click (mdedit.ts openImgBar) */
+.md-imgbar {
+  position: fixed; z-index: 90; display: flex; align-items: center; gap: 2px; padding: 4px;
+  border: 1px solid #e4e4e7; border-radius: 12px; background: #fff;
+  box-shadow: 0 0 0 1px rgb(15 15 15 / .04), 0 4px 8px rgb(15 15 15 / .08), 0 12px 28px rgb(15 15 15 / .16);
+  transform-origin: 0 0; animation: md-imgbar-in .12s ease-out;
+}
+@keyframes md-imgbar-in { from { opacity: 0; transform: scale(.9) translateY(-4px); } }
+.md-imgbar button { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; color: #52525b; cursor: pointer; transition: background .1s, color .1s; }
+.md-imgbar button:hover { background: #f4f4f5; color: #18181b; }
+.md-imgbar button.on { background: #fef3c7; color: #b45309; }
+.md-imgbar .sep { width: 1px; height: 20px; margin: 0 4px; background: #e4e4e7; }
+/* hover preview: just the top of the page, its bottom fading out (no frame around it) */
+.np-peek { animation: np-peek-in .14s ease-out; }
+@keyframes np-peek-in { from { opacity: 0; transform: translateY(-4px); } }
+.np-peek-clip { height: 18rem; overflow: hidden; border-radius: 8px; background: #fff; box-shadow: 0 0 0 1px rgb(0 0 0 / .06), 0 12px 32px rgb(0 0 0 / .18); }
+.np-peek-page { min-height: 297mm; border-radius: 0; box-shadow: none; color: #27272a; }
+/* Notepad tools dropdown: the font in use gets a check */
+.np-fontopt .np-fontchk { visibility: hidden; }
+.np-fontopt.on { color: var(--color-zinc-100); background: var(--color-zinc-800); }
+.np-fontopt.on .np-fontchk { visibility: visible; }
+
+/* A4 pages: 40 text rows on a portrait page, 27 on landscape (rows start at the 72px top margin).
+   The editor marks where each page ends; Export PDF (#np-print) lays the note out on real sheets of that size. */
+#np-text { position: relative; }
+#np-text::before {
+  content: ""; position: absolute; inset: 72px 0 0; pointer-events: none;
+  background: linear-gradient(transparent 959px, rgb(245 158 11 / .6) 0) 0 0 / 100% 960px repeat-y;
+}
+#np-text[data-orient="landscape"]::before { background: linear-gradient(transparent 647px, rgb(245 158 11 / .6) 0) 0 0 / 100% 648px repeat-y; }
+#np-print { position: fixed; top: 0; left: -10000px; }
+.np-sheet {
+  height: 297mm; min-height: 0; padding-bottom: calc(297mm - 72px - 960px); overflow: hidden;
+  border-radius: 0; box-shadow: none; font-size: 15px; line-height: 24px;
+  break-after: page; -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+.np-sheet[data-orient="landscape"] { height: 210mm; padding-bottom: calc(210mm - 72px - 648px); }
+.np-sheet p, .np-sheet ul, .np-sheet ol { margin: 0; }
+.np-sheet img { max-width: 100%; max-height: 900px; }
+.np-sheet[data-orient="landscape"] img { max-height: 600px; }
+@media print {
+  html, body { background: #fff !important; }
+  body > *:not(#np-print) { display: none !important; }
+  #np-print { position: static; }
+}
+
+/* mdlines.ts: a note drawn like the editor (Export PDF sheets, hover preview) — same sizes and colours as mdedit.ts */
+.mdl-row { min-height: 24px; font-size: 15px; line-height: 24px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mdl-h1 { font-size: 1.6em; font-weight: 700; }
+.mdl-h2 { font-size: 1.3em; font-weight: 700; }
+.mdl-h3 { font-size: 1.1em; font-weight: 600; color: var(--color-amber-400); }
+.mdl-quote { color: var(--color-zinc-400); font-style: italic; }
+.mdl-bullet { color: var(--color-amber-400); padding: 0 .35em 0 .1em; }
+.mdl-box { accent-color: var(--color-amber-500); margin: 0 .4em 0 0; vertical-align: -2px; }
+.mdl-hr { display: inline-block; width: 100%; vertical-align: middle; border-top: 1px solid var(--color-zinc-700); }
+.mdl-row strong { font-weight: 700; }
+.mdl-row em { font-style: italic; }
+.mdl-row del { text-decoration: line-through; }
+.mdl-row code { font-family: 'Cascadia Mono', Consolas, monospace; font-size: .9em; color: var(--code-str); }
+.mdl-row a { color: var(--color-amber-400); text-decoration: underline; }
+.mdl-img { display: flex; align-items: center; width: fit-content; max-width: 100%; }
+.mdl-img-center { margin: 0 auto; }
+.mdl-img-left { float: left; margin-right: 16px; }
+.mdl-img-right { float: right; margin-left: 16px; }
+.mdl-block { padding: 4px 0; }
+/* paper picker in the tools dropdown: tiny sheets showing each style */
+.np-paperopt { color: var(--color-zinc-400); }
+.np-paperopt.on { background: rgb(245 158 11 / .15); color: var(--color-amber-400); box-shadow: inset 0 0 0 1.5px var(--color-amber-500); }
+.np-swatch { display: block; width: 22px; height: 30px; border-radius: 2px; background-color: #fff; box-shadow: 0 0 0 1px rgb(0 0 0 / .15), 0 1px 2px rgb(0 0 0 / .15); }
+.np-swatch[data-paper="lined"] { background-image: linear-gradient(transparent 3px, #a1a1aa 3px); background-size: 100% 4px; background-position: 0 4px; background-repeat: repeat-y; background-clip: content-box; padding: 3px; }
+.np-swatch[data-paper="ruled"] { background-image: linear-gradient(90deg, transparent 4px, #ef4444 4px, #ef4444 5px, transparent 5px), linear-gradient(transparent 3px, #a1a1aa 3px); background-size: 100% 100%, 100% 4px; background-position: 0 0, 0 5px; }
+.np-swatch[data-paper="dots"] { background-image: radial-gradient(circle, #71717a .6px, transparent .9px); background-size: 4px 4px; background-position: 1px 2px; }

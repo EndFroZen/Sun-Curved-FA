@@ -14,10 +14,10 @@ const LANGS = { sqlite: StreamLanguage.define(sqlite), postgres: StreamLanguage.
 
 const unq = (s: string) => s.replace(/["`]/g, "");
 
-export type SqlEditor = { setDialect(d: Dialect): void; setSchema(cols: { t: string; c: string; ty?: string }[]): void; focus(): void; runCurrent(): void; runAll(): void; newTab(text: string): void };
+export type SqlEditor = { setDialect(d: Dialect): void; setSchema(cols: { t: string; c: string; ty?: string }[]): void; focus(): void; runCurrent(prefix?: string): void; runAll(): void; newTab(text: string, name?: string, sid?: number): void; current(): { name: string; text: string; sid?: number }; markSaved(sid: number, name: string): void; forget(sid: number): void };
 
 /** `run(sql)` gets the selection, else the statement at the cursor (Ctrl+Enter), or the whole tab (Ctrl+Shift+Enter). */
-export function createSqlEditor(parent: HTMLElement, tabsBar: HTMLElement, run: (sql: string) => void): SqlEditor {
+export function createSqlEditor(parent: HTMLElement, tabsBar: HTMLElement, run: (sql: string) => void, onSave: () => void): SqlEditor {
   let dialect: Dialect = "sqlite";
   type ColInfo = { c: string; ty: string };
   let schema = new Map<string, ColInfo[]>();
@@ -84,17 +84,17 @@ export function createSqlEditor(parent: HTMLElement, tabsBar: HTMLElement, run: 
   }
 
   const lang = new Compartment();
-  const runKeys = (all: boolean) => (v: EditorView) => {
+  const runKeys = (all: boolean, prefix = "") => (v: EditorView) => {
     const sel = v.state.selection.main, doc = v.state.doc.toString();
     const s = all ? null : sel.empty ? statementAt(doc, sel.head) : sel;
     const sql = all ? doc : s ? doc.slice(s.from, s.to) : "";
     if (!all && s && sel.empty) v.dispatch({ selection: { anchor: s.from, head: s.to } }); // show what ran
-    if (sql.trim()) run(sql);
+    if (sql.trim()) run(prefix + sql);
     return true;
   };
   const extensions = () => [
     basicSetup,
-    Prec.highest(keymap.of([{ key: "Mod-Enter", run: runKeys(false) }, { key: "Shift-Mod-Enter", run: runKeys(true) }])),
+    Prec.highest(keymap.of([{ key: "Mod-Enter", run: runKeys(false) }, { key: "Shift-Mod-Enter", run: runKeys(true) }, { key: "Mod-s", preventDefault: true, run: () => (onSave(), true) }])),
     keymap.of([indentWithTab]),
     lang.of(LANGS[dialect]),
     LANGS.sqlite.data.of({ autocomplete: complete }),
@@ -102,20 +102,21 @@ export function createSqlEditor(parent: HTMLElement, tabsBar: HTMLElement, run: 
     LANGS.mysql.data.of({ autocomplete: complete }),
     syntaxHighlighting(highlight),
     theme,
+    EditorView.lineWrapping,
     EditorView.updateListener.of((u) => u.docChanged && save()),
   ];
 
   // Tabs: one EditorState each (keeps undo history per tab); text survives restarts via localStorage.
-  type Tab = { name: string; state: EditorState };
-  let saved: { name: string; text: string }[] = [];
+  type Tab = { name: string; state: EditorState; sid?: number }; // sid = saved query id (Main › Saved queries)
+  let saved: { name: string; text: string; sid?: number }[] = [];
   try { saved = JSON.parse(localStorage.bcTabs ?? "[]"); } catch {} // corrupt → start fresh
   if (!saved.length) saved = [{ name: "Query 1", text: "" }];
-  const tabs: Tab[] = saved.map((t) => ({ name: t.name, state: EditorState.create({ doc: t.text, extensions: extensions() }) }));
+  const tabs: Tab[] = saved.map((t) => ({ name: t.name, sid: t.sid, state: EditorState.create({ doc: t.text, extensions: extensions() }) }));
   let cur = 0;
   const view = new EditorView({ parent, state: tabs[0].state });
   function save() {
     tabs[cur].state = view.state;
-    try { localStorage.bcTabs = JSON.stringify(tabs.map((t) => ({ name: t.name, text: t.state.doc.toString() }))); } catch {}
+    try { localStorage.bcTabs = JSON.stringify(tabs.map((t) => ({ name: t.name, sid: t.sid, text: t.state.doc.toString() }))); } catch {}
   }
   const show = (i: number) => {
     tabs[cur].state = view.state;
@@ -130,9 +131,12 @@ export function createSqlEditor(parent: HTMLElement, tabsBar: HTMLElement, run: 
         ${t.name.replace(/[&<>"]/g, "")}${tabs.length > 1 ? `<button data-x title="Close tab" class="ml-1 rounded px-1 text-zinc-500 opacity-0 hover:text-red-400 group-hover:opacity-100">×</button>` : ""}</span>`).join("") +
       `<button data-new title="New query tab" class="px-2 text-sm text-zinc-500 hover:text-amber-400">+</button>`;
   };
-  function newTab(text: string) {
+  /** `sid` = open a saved query; if it's already in a tab, switch to that tab instead. */
+  function newTab(text: string, name?: string, sid?: number) {
+    const open = sid === undefined ? -1 : tabs.findIndex((t) => t.sid === sid);
+    if (open >= 0) return show(open);
     const n = Math.max(0, ...tabs.map((x) => +(/^Query (\d+)$/.exec(x.name)?.[1] ?? 0))) + 1;
-    tabs.push({ name: `Query ${n}`, state: EditorState.create({ doc: text, extensions: extensions() }) });
+    tabs.push({ name: name ?? `Query ${n}`, sid, state: EditorState.create({ doc: text, extensions: extensions() }) });
     show(tabs.length - 1);
     save();
   }
@@ -164,8 +168,19 @@ export function createSqlEditor(parent: HTMLElement, tabsBar: HTMLElement, run: 
       }
     },
     focus: () => view.focus(),
-    runCurrent: () => void runKeys(false)(view),
+    runCurrent: (prefix = "") => void runKeys(false, prefix)(view),
     runAll: () => void runKeys(true)(view),
     newTab,
+    current: () => ({ name: tabs[cur].name, text: view.state.doc.toString(), sid: tabs[cur].sid }),
+    markSaved(sid, name) {
+      Object.assign(tabs[cur], { sid, name });
+      draw();
+      save();
+    },
+    /** A saved query was deleted: its tabs become plain tabs again. */
+    forget(sid) {
+      for (const t of tabs) if (t.sid === sid) t.sid = undefined;
+      save();
+    },
   };
 }

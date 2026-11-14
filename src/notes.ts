@@ -8,6 +8,7 @@ const md = new Marked({ gfm: true, breaks: true, renderer: {
   link: ({ href, text }) => (/^(https?:|mailto:)/i.test(href) ? `<a href="${esc(href)}" target="_blank" rel="noopener">${esc(text)}</a>` : esc(text)),
 } });
 export const safeMd = (s: string) => md.parse(s, { async: false });
+export const safeInline = (s: string) => md.parseInline(s, { async: false });
 
 /** Flip the n-th Markdown task box (`- [ ]` / `- [x]`), counted in source order like the rendered checkboxes.
  * ponytail: a task-looking line inside a fenced code block is counted too; marked doesn't render it, so later boxes shift by one. */

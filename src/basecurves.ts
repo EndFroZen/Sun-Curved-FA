@@ -27,19 +27,58 @@ export const tablesSql = (d: Dialect) =>
   : d === "postgres" ? "SELECT table_name AS name FROM information_schema.tables WHERE table_schema = current_schema() ORDER BY 1"
   : "SELECT table_name AS name FROM information_schema.tables WHERE table_schema = DATABASE() ORDER BY 1";
 
-/** Column names/types/PK flag; one param: the table (Postgres: quoted name, for regclass). SQLite needs none. */
-export const colsSql = (d: Dialect) =>
-  d === "postgres"
-    ? `SELECT a.attname AS name, format_type(a.atttypid, a.atttypmod) AS type,
+/** One table's columns: name, type, nullable, default, pk (MySQL adds extra). Returns [sql, args]. */
+export const structSql = (d: Dialect, t: string): [string, unknown[]] =>
+  d === "sqlite" ? [`SELECT name, type, NOT "notnull" AS nullable, dflt_value AS "default", pk FROM pragma_table_info($1)`, [t]]
+  : d === "postgres"
+    ? [`SELECT a.attname AS name, format_type(a.atttypid, a.atttypmod) AS type, NOT a.attnotnull AS nullable, pg_get_expr(ad.adbin, ad.adrelid) AS "default",
         EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = a.attrelid AND i.indisprimary AND a.attnum = ANY(i.indkey)) AS pk
-       FROM pg_attribute a WHERE a.attrelid = CAST($1 AS regclass) AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum`
-    : d === "mysql"
-      ? "SELECT column_name AS name, column_type AS type, column_key = 'PRI' AS pk FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position"
-      : "";
+       FROM pg_attribute a LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+       WHERE a.attrelid = CAST($1 AS regclass) AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum`, [qid(d, t)]]
+    : ["SELECT column_name AS name, column_type AS type, is_nullable = 'YES' AS nullable, column_default AS `default`, column_key = 'PRI' AS pk, extra FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position", [t]];
+
+/** One table's indexes. Returns [sql, args]. */
+export const indexSql = (d: Dialect, t: string): [string, unknown[]] =>
+  d === "sqlite" ? [`SELECT il.name, il."unique", group_concat(ii.name, ', ') AS columns FROM pragma_index_list($1) il JOIN pragma_index_info(il.name) ii GROUP BY il.name`, [t]]
+  : d === "postgres" ? ["SELECT indexname AS name, indexdef AS definition FROM pg_indexes WHERE schemaname = current_schema() AND tablename = $1 ORDER BY 1", [t]]
+  : ["SELECT index_name AS name, NOT non_unique AS `unique`, GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ', ') AS columns FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? GROUP BY index_name, non_unique", [t]];
+
+/** Every foreign key in the current database/schema: rows of { t, c, rt, rc } (SQLite rc may be null = the target's PK). */
+export const fksSql = (d: Dialect) =>
+  d === "sqlite" ? `SELECT m.name AS t, f."from" AS c, f."table" AS rt, f."to" AS rc FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f WHERE m.type = 'table'`
+  : d === "postgres"
+    ? `SELECT cl.relname AS t, a.attname AS c, rcl.relname AS rt, ra.attname AS rc
+       FROM pg_constraint k JOIN pg_class cl ON cl.oid = k.conrelid JOIN pg_class rcl ON rcl.oid = k.confrelid
+       CROSS JOIN LATERAL unnest(k.conkey, k.confkey) AS u(a1, a2)
+       JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = u.a1
+       JOIN pg_attribute ra ON ra.attrelid = k.confrelid AND ra.attnum = u.a2
+       WHERE k.contype = 'f' AND cl.relnamespace = current_schema()::regnamespace`
+    : "SELECT table_name AS t, column_name AS c, referenced_table_name AS rt, referenced_column_name AS rc FROM information_schema.key_column_usage WHERE table_schema = DATABASE() AND referenced_table_name IS NOT NULL";
 
 // ponytail: WITHOUT ROWID SQLite tables can't be edited here; use the SQL box.
-export const selectSql = (d: Dialect, t: string, limit = 500) =>
-  `SELECT ${d === "sqlite" ? "rowid AS __rowid, " : ""}* FROM ${qid(d, t)} LIMIT ${limit}`;
+export type Sort = { col: string; desc: boolean } | null;
+/** Raw WHERE text from the filter box ("WHERE" prefix optional); the user already runs arbitrary SQL here. */
+const whereOf = (w = "") => ((w = w.trim().replace(/^where\s+/i, "")) ? ` WHERE ${w}` : "");
+export const selectSql = (d: Dialect, t: string, o: { where?: string; sort?: Sort; limit?: number; offset?: number } = {}) =>
+  `SELECT ${d === "sqlite" ? "rowid AS __rowid, " : ""}* FROM ${qid(d, t)}${whereOf(o.where)}${o.sort ? ` ORDER BY ${qid(d, o.sort.col)}${o.sort.desc ? " DESC" : ""}` : ""} LIMIT ${o.limit ?? 500}${o.offset ? ` OFFSET ${o.offset}` : ""}`;
+export const countSql = (d: Dialect, t: string, where = "") => `SELECT COUNT(*) AS n FROM ${qid(d, t)}${whereOf(where)}`;
+export const truncateSql = (d: Dialect, t: string) => (d === "sqlite" ? `DELETE FROM ${qid(d, t)}` : `TRUNCATE TABLE ${qid(d, t)}`);
+
+/** A column in the New Table form. `def` is a raw SQL expression ('text', 0, CURRENT_TIMESTAMP). */
+export type NewCol = { name: string; type: string; pk: boolean; nn: boolean; auto: boolean; def: string };
+export function createSql(d: Dialect, t: string, cols: NewCol[]) {
+  const pks = cols.filter((c) => c.pk);
+  const line = (c: NewCol) =>
+    `${qid(d, c.name)} ${d === "sqlite" && c.auto ? "INTEGER" : c.type}` // SQLite: INTEGER PRIMARY KEY is the auto rowid
+    + (c.auto && d === "postgres" ? " GENERATED BY DEFAULT AS IDENTITY" : "")
+    + (c.nn ? " NOT NULL" : "")
+    + (c.def.trim() ? ` DEFAULT ${c.def.trim()}` : "")
+    + (c.pk && pks.length === 1 ? " PRIMARY KEY" : "")
+    + (c.auto && d === "mysql" ? " AUTO_INCREMENT" : "");
+  const lines = cols.map(line);
+  if (pks.length > 1) lines.push(`PRIMARY KEY (${pks.map((c) => qid(d, c.name)).join(", ")})`);
+  return `CREATE TABLE ${qid(d, t)} (\n  ${lines.join(",\n  ")}\n)`;
+}
 
 const where = (d: Dialect, keys: Col[], from: number) => keys.map((k, i) => `${qid(d, k.name)} = ${ph(d, from + i, k.type)}`).join(" AND ");
 export const updateSql = (d: Dialect, t: string, col: Col, keys: Col[]) =>
@@ -169,6 +208,18 @@ export const statementAt = (sql: string, pos: number) => {
 export const isRead = (sql: string) =>
   /^(select|pragma|with|explain|values|show|desc|describe)\b/i.test(sql.replace(/^(\s|--[^\n]*|\/\*[\s\S]*?\*\/)*/, "")); // after leading comments
 
+/** Cap a SELECT/WITH that has no LIMIT/FETCH of its own, so a huge table can't overflow the IPC string (RangeError).
+ * Asks for n+1 rows so the caller can tell there were more. LIMIT goes on a new line in case the query ends in a -- comment.
+ * ponytail: a LIMIT anywhere (even in a subquery) counts as "has one"; `SELECT … FOR UPDATE` isn't capped. */
+export function capRows(sql: string, n: number) {
+  const body = sql.replace(/^(\s|--[^\n]*|\/\*[\s\S]*?\*\/)*/, "");
+  const capped = /^(select|with)\b/i.test(body) && !/\b(limit|fetch\s+first|fetch\s+next|for\s+update|for\s+share)\b/i.test(sql);
+  return { sql: capped ? `${sql}\nLIMIT ${n + 1}` : sql, capped };
+}
+
+/** 850 ms / 16.2 s */
+export const dur = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`);
+
 /** Connection form fields <-> saved URL (no password; that lives in the OS credential store). */
 export type Kind = "postgres" | "mysql" | "mariadb" | "sqlite";
 export const KIND_LABEL: Record<Kind, string> = { postgres: "PostgreSQL", mysql: "MySQL", mariadb: "MariaDB", sqlite: "SQLite" };
@@ -201,7 +252,7 @@ export function tunnelOf(s: string): { ssh: number; host: string; port: number }
 export function viaLocal(s: string, port: number | null) {
   if (!isUrl(s)) return s;
   const u = new URL(s);
-  u.search = "";
+  u.searchParams.delete("ssh");
   if (port) (u.hostname = "127.0.0.1"), (u.port = String(port));
   return u.toString();
 }
@@ -211,11 +262,164 @@ export function withPw(s: string, pw: string) {
   u.password = pw;
   return u.toString();
 }
-/** Same server, another database. */
+/** Same server, another database (back to its default schema). */
 export function withDb(s: string, dbName: string) {
   const u = new URL(s);
   u.pathname = "/" + enc(dbName);
+  u.searchParams.delete("options");
   return u.toString();
 }
+/** Postgres: same database, another schema, via the startup `search_path` (sqlx reads `?options=`).
+ * ponytail: names needing quotes (spaces, capitals) won't resolve; quote them if that comes up. */
+export function withSchema(s: string, schema: string) {
+  const u = new URL(s);
+  u.searchParams.set("options", `-c search_path=${schema}`);
+  return u.toString();
+}
+export const schemasSql = "SELECT nspname AS name FROM pg_namespace WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema' ORDER BY 1";
 export const dbsSql = (d: Dialect) =>
   d === "postgres" ? "SELECT datname AS name FROM pg_database WHERE NOT datistemplate ORDER BY 1" : "SELECT schema_name AS name FROM information_schema.schemata ORDER BY 1";
+
+// ----- editable query results -----
+type Item = { q: string | null; col: string; as: string | null } | { expr: true; as: string | null };
+export type Sel = { tables: { name: string; alias: string | null }[]; items: Item[] };
+/** Where an editable result column lives: table, column, and which result columns hold that table's key values. */
+export type Src = { t: string; col: Col; keys: [Col, string][] };
+
+/** Split on commas (and `sep`) at paren depth 0, outside quotes. */
+function splitTop(s: string, sep?: RegExp) {
+  const out: string[] = [];
+  let depth = 0, quote = "", from = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (quote) { if (ch === quote) quote = ""; continue; }
+    if (`'"\``.includes(ch)) quote = ch;
+    else if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    else if (depth === 0) {
+      const m = ch === "," ? [","] : sep ? s.slice(i).match(sep) : null;
+      if (m) (out.push(s.slice(from, i)), (i += m[0].length - 1), (from = i + 1));
+    }
+  }
+  return [...out, s.slice(from)].map((x) => x.trim());
+}
+const ID = String.raw`(?:"(?:[^"]|"")+"|\`(?:[^\`]|\`\`)+\`|\w+)`;
+const unq = (d: Dialect, t: string) => (/^["`]/.test(t) ? t.slice(1, -1).split(t[0] + t[0]).join(t[0]) : d === "postgres" ? t.toLowerCase() : t);
+
+/** Parse `SELECT list FROM t [a] [JOIN u [b] ON …]… [WHERE/ORDER/LIMIT …]`; null for anything fancier
+ * (subqueries, unions, grouping, DISTINCT, schema-qualified names) — those results stay read-only. */
+export function selectFrom(d: Dialect, sql: string): Sel | null {
+  const s = sql.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, " ").trim().replace(/;\s*$/, "");
+  if ((s.match(/\bselect\b/gi) ?? []).length !== 1 || /\b(union|intersect|except|group\s+by|distinct|having|window)\b/i.test(s)) return null;
+  const m = s.match(/^select\s+([\s\S]+?)\s+from\s+([\s\S]+?)(?:\s+(?:where|order\s+by|limit|offset|fetch|for)\b[\s\S]*)?$/i);
+  if (!m) return null;
+  const tables: Sel["tables"] = [];
+  for (const p of splitTop(m[2], /^\s+(?:natural\s+)?(?:(?:inner|cross|(?:left|right|full)(?:\s+outer)?)\s+)?join\s+/i)) {
+    const t = p.match(new RegExp(String.raw`^(${ID})(?:\s+(?:as\s+)?(?!on\b|using\b)(${ID}))?(?:\s+(?:on|using)\b[\s\S]*)?$`, "i"));
+    if (!t) return null;
+    tables.push({ name: unq(d, t[1]), alias: t[2] ? unq(d, t[2]) : null });
+  }
+  const items = splitTop(m[1]).map((it): Item => {
+    const star = it.match(new RegExp(String.raw`^(?:(${ID})\.)?\*$`));
+    if (star) return { q: star[1] ? unq(d, star[1]) : null, col: "*", as: null };
+    const c = it.match(new RegExp(String.raw`^(?:(${ID})\.)?(${ID})(?:\s+(?:as\s+)?(${ID}))?$`, "i"));
+    if (c) return { q: c[1] ? unq(d, c[1]) : null, col: unq(d, c[2]), as: c[3] ? unq(d, c[3]) : null };
+    const a = it.match(new RegExp(String.raw`\s(?:as\s+)?(${ID})$`, "i"));
+    return { expr: true, as: a ? unq(d, a[1]) : null };
+  });
+  return { tables, items };
+}
+
+/** Result column → its source, given each table's columns. A result name produced twice, or a table whose
+ * primary key isn't in the result, stays read-only (we can't tell which row to update).
+ * ponytail: unaliased expressions get driver-chosen names (e.g. "count"); a clash with a real column isn't detected. */
+export function editCols(d: Dialect, p: Sel, structs: Map<string, Col[]>): Map<string, Src> {
+  const same = (a: string, b: string) => (d === "postgres" ? a === b : a.toLowerCase() === b.toLowerCase());
+  const colsOf = (i: number) => structs.get(p.tables[i].name) ?? [];
+  const byQual = (q: string) => p.tables.findIndex((t) => (t.alias ? same(t.alias, q) : same(t.name, q)));
+  const found = new Map<string, { ti: number; col: Col } | null>(), seen = new Map<string, number>();
+  const add = (name: string, src: { ti: number; col: Col } | null) => (seen.set(name, (seen.get(name) ?? 0) + 1), found.set(name, src));
+  for (const it of p.items) {
+    if ("expr" in it) { if (it.as) add(it.as, null); continue; }
+    if (it.col === "*") {
+      const tis = it.q === null ? p.tables.map((_, i) => i) : [byQual(it.q)];
+      for (const ti of tis) for (const col of ti < 0 ? [] : colsOf(ti)) add(col.name, { ti, col });
+      continue;
+    }
+    const tis = it.q !== null ? [byQual(it.q)] : p.tables.map((_, i) => i).filter((i) => colsOf(i).some((c) => same(c.name, it.col)));
+    const col = tis.length === 1 && tis[0] >= 0 ? colsOf(tis[0]).find((c) => same(c.name, it.col)) : undefined;
+    add(it.as ?? it.col, col ? { ti: tis[0], col } : null);
+  }
+  const out = new Map<string, Src>();
+  const keysOf = new Map<number, [Col, string][] | null>();
+  for (const [name, src] of found) {
+    if (!src || seen.get(name)! > 1) continue;
+    if (!keysOf.has(src.ti)) {
+      const pk = colsOf(src.ti).filter((c) => Number(c.pk));
+      const ks = pk.map((k): [Col, string] | null => {
+        const n = [...found].find(([n, s]) => s && s.ti === src.ti && s.col.name === k.name && seen.get(n) === 1)?.[0];
+        return n === undefined ? null : [k, n];
+      });
+      keysOf.set(src.ti, pk.length && ks.every(Boolean) ? (ks as [Col, string][]) : null);
+    }
+    const keys = keysOf.get(src.ti);
+    if (keys) out.set(name, { t: p.tables[src.ti].name, col: src.col, keys });
+  }
+  return out;
+}
+
+// ----- visual query builder -----
+export type JoinType = "INNER" | "LEFT" | "RIGHT" | "FULL";
+/** tables: alias `a` of table `t` (alias = name when used once); joins: "a.ac = b.bc" with `a TYPE JOIN b` meaning. */
+export const FILTER_OPS = ["=", "<>", ">", ">=", "<", "<=", "contains", "LIKE", "IN", "IS NULL", "IS NOT NULL"] as const;
+export type QbFilter = { a: string; c: string; op: (typeof FILTER_OPS)[number]; v: string };
+/** filters: value boxes linked to a column, ANDed into WHERE after the free-text `where`. */
+export type Qb = { tables: { a: string; t: string }[]; joins: { a: string; ac: string; b: string; bc: string; type: JoinType }[]; cols: { a: string; c: string }[]; where: string; limit: number; filters?: QbFilter[] };
+
+/** SQL for the builder. The first table is FROM; others attach through their joins (LEFT/RIGHT flip when written from
+ * the other side); a second join between tables already in becomes an extra AND on the later one; unconnected tables CROSS JOIN. */
+export function builderSql(d: Dialect, q: Qb): string {
+  if (!q.tables.length) return "";
+  const id = (s: string) => qid(d, s), ref = (x: { a: string; t: string }) => (x.a === x.t ? id(x.t) : `${id(x.t)} AS ${id(x.a)}`);
+  const cond = (j: Qb["joins"][number]) => `${id(j.a)}.${id(j.ac)} = ${id(j.b)}.${id(j.bc)}`;
+  const flip: Record<JoinType, JoinType> = { INNER: "INNER", LEFT: "RIGHT", RIGHT: "LEFT", FULL: "FULL" };
+  const order = [q.tables[0].a], on = new Map<string, { type: string; conds: string[] }>();
+  let rest = q.joins.filter((j) => j.a !== j.b);
+  for (;;) {
+    let moved = true;
+    while (moved) {
+      moved = false;
+      for (const j of rest) {
+        const ia = order.indexOf(j.a), ib = order.indexOf(j.b);
+        if (ia >= 0 && ib >= 0) on.get(order[Math.max(ia, ib)])?.conds.push(cond(j));
+        else if (ia >= 0) (order.push(j.b), on.set(j.b, { type: j.type, conds: [cond(j)] }));
+        else if (ib >= 0) (order.push(j.a), on.set(j.a, { type: flip[j.type], conds: [cond(j)] }));
+        else continue;
+        rest = rest.filter((x) => x !== j);
+        moved = true;
+        break;
+      }
+    }
+    const loose = q.tables.find((t) => !order.includes(t.a));
+    if (!loose) break;
+    order.push(loose.a);
+    on.set(loose.a, { type: "CROSS", conds: [] });
+  }
+  const byA = new Map(q.tables.map((t) => [t.a, t]));
+  const dup = new Set(q.cols.map((c) => c.c).filter((c, i, all) => all.indexOf(c) !== i));
+  const cols = q.cols.length ? q.cols.map((c) => `${id(c.a)}.${id(c.c)}${dup.has(c.c) ? ` AS ${id(`${c.a}_${c.c}`)}` : ""}`).join(",\n  ") : "*";
+  const lit = (v: string) => `'${v.replace(/'/g, "''")}'`;
+  const fcond = (f: QbFilter) => {
+    const col = `${id(f.a)}.${id(f.c)}`;
+    if (f.op === "IS NULL" || f.op === "IS NOT NULL") return `${col} ${f.op}`;
+    if (f.op === "contains") return `${col} LIKE ${lit(`%${f.v}%`)}`;
+    if (f.op === "IN") return `${col} IN (${f.v.split(",").map((s) => lit(s.trim())).join(", ")})`;
+    return `${col} ${f.op} ${lit(f.v)}`;
+  };
+  const fs = (q.filters ?? []).filter((f) => byA.has(f.a)).map(fcond), user = whereOf(q.where).replace(/^ WHERE /, "");
+  const conds = [...(user ? [fs.length ? `(${user})` : user] : []), ...fs];
+  const where = conds.length ? `WHERE ${conds.join("\n  AND ")}` : "";
+  return [`SELECT ${cols}`, `FROM ${ref(q.tables[0])}`,
+    ...order.slice(1).map((a) => { const j = on.get(a)!; return `${j.type} JOIN ${ref(byA.get(a)!)}${j.conds.length ? ` ON ${j.conds.join(" AND ")}` : ""}`; }),
+    ...(where ? [where] : []), ...(q.limit > 0 ? [`LIMIT ${q.limit}`] : [])].join("\n");
+}

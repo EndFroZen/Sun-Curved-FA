@@ -520,12 +520,177 @@ fn tunnel_loop(sess: &Session, listener: &std::net::TcpListener, rhost: &str, rp
     }
 }
 
+// ----- Notepad: each note is <name>.md in %APPDATA%\Sun Curved\notepad[\<folder>] (one folder level) -----
+// A note's id is its file creation time (ms): stable across rename/move, so pins/recent survive restarts.
+
+fn np_root() -> Result<PathBuf, String> {
+    let base = std::env::var_os("APPDATA").map(PathBuf::from).ok_or("APPDATA not set")?;
+    let d = base.join("Sun Curved").join("notepad");
+    std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+    Ok(d)
+}
+
+// names come from the UI: refuse anything that could escape the notepad folder or that Windows rejects
+fn np_part(s: &str) -> Result<&str, String> {
+    let bad = s.trim().is_empty() || s == "." || s == ".." || s.ends_with(['.', ' '])
+        || s.chars().any(|c| "<>:\"/\\|?*".contains(c) || c < ' ');
+    if bad { Err(format!("invalid name: {s}")) } else { Ok(s) }
+}
+
+fn np_path(folder: &str, name: Option<&str>) -> Result<PathBuf, String> {
+    let mut p = np_root()?;
+    if !folder.is_empty() { p.push(np_part(folder)?) }
+    if let Some(n) = name { p.push(format!("{}.md", np_part(n)?)) }
+    Ok(p)
+}
+
+fn np_ms(t: std::io::Result<std::time::SystemTime>) -> u64 {
+    t.ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64)
+}
+
+#[derive(Serialize)]
+struct NpNote { id: u64, name: String, text: String, t: u64, folder: Option<String> }
+
+#[derive(Serialize)]
+struct NpTree { dirs: Vec<String>, notes: Vec<NpNote> }
+
+fn np_scan(dir: &Path, folder: Option<&str>, out: &mut NpTree) -> std::io::Result<()> {
+    for e in std::fs::read_dir(dir)? {
+        let p = e?.path();
+        let m = std::fs::metadata(&p)?;
+        if m.is_dir() {
+            let Some(name) = p.file_name().and_then(|s| s.to_str()) else { continue };
+            if folder.is_none() && !name.starts_with('.') { // one level only; ".assets" etc. are not note folders
+                out.dirs.push(name.to_string());
+                np_scan(&p, Some(name), out)?;
+            }
+        } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("md")) {
+            let Some(name) = p.file_stem().and_then(|s| s.to_str()) else { continue };
+            out.notes.push(NpNote {
+                id: np_ms(m.created()),
+                name: name.to_string(),
+                text: String::from_utf8_lossy(&std::fs::read(&p)?).into_owned(),
+                t: np_ms(m.modified()),
+                folder: folder.map(str::to_string),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn np_list() -> Result<NpTree, String> {
+    let mut out = NpTree { dirs: vec![], notes: vec![] };
+    np_scan(&np_root()?, None, &mut out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// write a note; returns its id (file creation time)
+#[tauri::command]
+fn np_write(folder: String, name: String, text: String) -> Result<u64, String> {
+    let p = np_path(&folder, Some(&name))?;
+    std::fs::write(&p, text).map_err(|e| e.to_string())?;
+    Ok(np_ms(std::fs::metadata(&p).and_then(|m| m.created())))
+}
+
+#[tauri::command]
+fn np_mkdir(folder: String) -> Result<(), String> {
+    std::fs::create_dir(np_path(&folder, None)?).map_err(|e| e.to_string())
+}
+
+/// rename/move a note (name = Some) or rename a folder (name = None); never overwrites
+#[tauri::command]
+fn np_move(folder: String, name: Option<String>, to_folder: String, to_name: Option<String>) -> Result<(), String> {
+    let (from, to) = (np_path(&folder, name.as_deref())?, np_path(&to_folder, to_name.as_deref())?);
+    if to.exists() { return Err(format!("already exists: {}", to.display())) }
+    std::fs::rename(from, to).map_err(|e| e.to_string())
+}
+
+/// delete a note, or an (empty) folder
+#[tauri::command]
+fn np_remove(folder: String, name: Option<String>) -> Result<(), String> {
+    let p = np_path(&folder, name.as_deref())?;
+    if name.is_some() { std::fs::remove_file(p) } else { std::fs::remove_dir(p) }.map_err(|e| e.to_string())
+}
+
+// Images in notes live in notepad\.assets\<ms>.<ext>; notes link them as ![](.assets/<name>).
+// ponytail: images are never deleted (a note may still link one); add a "clean unused images" action if the folder grows
+fn np_assets() -> Result<PathBuf, String> {
+    let d = np_root()?.join(".assets");
+    std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+    Ok(d)
+}
+
+/// save raw image bytes (invoke body) with extension from the "x-ext" header; returns the file name
+#[tauri::command]
+fn np_save_image(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else { return Err("expected raw image bytes".into()) };
+    let ext = request.headers().get("x-ext").and_then(|v| v.to_str().ok()).unwrap_or("png").to_ascii_lowercase();
+    if !["png", "jpg", "jpeg", "gif", "webp", "bmp"].contains(&ext.as_str()) { return Err(format!("unsupported image type: {ext}")) }
+    let dir = np_assets()?;
+    let ms = np_ms(Ok(std::time::SystemTime::now()));
+    let name = (0..).map(|i| if i == 0 { format!("{ms}.{ext}") } else { format!("{ms}-{i}.{ext}") })
+        .find(|n| !dir.join(n).exists()).unwrap();
+    std::fs::write(dir.join(&name), bytes).map_err(|e| e.to_string())?;
+    Ok(name)
+}
+
+/// bytes of a saved image (arrives in JS as an ArrayBuffer)
+#[tauri::command]
+fn np_image(name: String) -> Result<tauri::ipc::Response, String> {
+    let p = np_assets()?.join(np_part(&name)?); // a bare file name only, never a path
+    std::fs::read(p).map(tauri::ipc::Response::new).map_err(|e| e.to_string())
+}
+
+/// Export PDF: WebView2 renders the page's print layout (the A4 sheets the Notepad just laid out) straight
+/// into Downloads\<name>.pdf — A4, no margins, backgrounds on, no header/footer, no print dialog. Returns the path.
+#[cfg(windows)]
+#[tauri::command]
+async fn np_pdf(webview: tauri::Webview, path: String, landscape: bool) -> Result<(), String> {
+    use webview2_com::{Microsoft::Web::WebView2::Win32::*, PrintToPdfCompletedHandler};
+    use windows::core::{Interface, HSTRING};
+    let path = PathBuf::from(path);
+    if !path.is_absolute() || !path.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf")) { return Err("choose a .pdf file".into()) }
+    let (tx, rx) = std::sync::mpsc::channel::<Result<bool, String>>();
+    let target = HSTRING::from(path.as_os_str());
+    webview.with_webview(move |w| {
+        let fail = tx.clone();
+        let start = || -> windows::core::Result<()> {
+            unsafe {
+                let wv = w.controller().CoreWebView2()?;
+                let env = wv.cast::<ICoreWebView2_2>()?.Environment()?.cast::<ICoreWebView2Environment6>()?;
+                let s = env.CreatePrintSettings()?;
+                s.SetOrientation(if landscape { COREWEBVIEW2_PRINT_ORIENTATION_LANDSCAPE } else { COREWEBVIEW2_PRINT_ORIENTATION_PORTRAIT })?;
+                s.SetPageWidth(8.27)?; // A4 in inches
+                s.SetPageHeight(11.69)?;
+                s.SetMarginTop(0.0)?;
+                s.SetMarginBottom(0.0)?;
+                s.SetMarginLeft(0.0)?;
+                s.SetMarginRight(0.0)?;
+                s.SetShouldPrintBackgrounds(true.into())?;
+                s.SetShouldPrintHeaderAndFooter(false.into())?;
+                let done = PrintToPdfCompletedHandler::create(Box::new(move |hr, ok| {
+                    let _ = tx.send(hr.map(|_| ok.into()).map_err(|e| e.to_string()));
+                    Ok(())
+                }));
+                wv.cast::<ICoreWebView2_7>()?.PrintToPdf(&target, &s, &done)
+            }
+        };
+        if let Err(e) = start() { let _ = fail.send(Err(e.to_string())); }
+    }).map_err(|e| e.to_string())?;
+    // the handler fires on the UI thread; wait for it off that thread
+    let ok = tauri::async_runtime::spawn_blocking(move || rx.recv().map_err(|e| e.to_string()))
+        .await.map_err(|e| e.to_string())???;
+    if ok { Ok(()) } else { Err("PDF export failed".into()) }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_sql::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             ssh_connect,
             ssh_disconnect,
@@ -537,7 +702,16 @@ pub fn run() {
             get_secret,
             del_secret,
             ssh_tunnel,
-            ssh_tunnels_close
+            ssh_tunnels_close,
+            np_list,
+            np_write,
+            np_mkdir,
+            np_move,
+            np_remove,
+            np_save_image,
+            np_image,
+            #[cfg(windows)]
+            np_pdf
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
