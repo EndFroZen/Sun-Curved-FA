@@ -48,3 +48,17 @@ assert.equal(readFileSync(join(dir, "it's.txt"), "utf8"), content);
 assert.throws(() => execFileSync("bash", ["-c", fake + sudoWriteScript(`${bashDir}/it's.txt`)], { input: `wrong\nzzz` }));
 assert.equal(readFileSync(join(dir, "it's.txt"), "utf8"), content);
 console.log("sudo write ok");
+
+// Upload + extract, live through bash: tar.gz, zip (if a tool exists), single .gz.
+import { extractScript, isArchive, uploadScript } from "./files.ts";
+assert.ok(isArchive("a.tar.gz") && isArchive("B.ZIP") && isArchive("x.7z") && !isArchive("a.txt"));
+const sh = (cmd: string, input?: string) => execFileSync("bash", ["-c", cmd], { input }).toString();
+const up = `${bashDir}/pkg`;
+sh(`mkdir -p '${up}/in' && echo hi > '${up}/in/a.txt' && cd '${up}' && tar -czf t.tar.gz in && gzip -k in/a.txt`);
+assert.equal(sh(extractScript(`${up}/t.tar.gz`)).trim(), `${up}/t`);
+assert.equal(sh(`cat '${up}/t/in/a.txt'`), "hi\n");
+assert.equal(sh(extractScript(`${up}/t.tar.gz`)).trim(), `${up}/t-2`); // never overwrites
+assert.equal(sh(extractScript(`${up}/in/a.txt.gz`)).trim(), `${up}/in/a.txt-2`);
+sh(uploadScript(`${up}/u.bin`), Buffer.from("bytes\0ok").toString("base64"));
+assert.equal(sh(`cat '${up}/u.bin'`), "bytes\0ok");
+console.log("upload/extract ok");

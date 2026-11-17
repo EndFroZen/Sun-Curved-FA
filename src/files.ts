@@ -51,3 +51,39 @@ export const joinPath = (dir: string, name: string) => (dir === "/" ? "" : dir) 
 
 export const fmtSize = (n: number) =>
   n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${(n / 1024).toFixed(1)} KB` : n < 1024 ** 3 ? `${(n / 1024 ** 2).toFixed(1)} MB` : `${(n / 1024 ** 3).toFixed(1)} GB`;
+
+/** Upload: stdin = base64 (remote_exec stdin is a string). Written to a .part file first, so a dropped
+ *  link never leaves a half file under the real name. */
+export const uploadScript = (path: string) =>
+  `p=${sq(path)}; base64 -d > "$p.part" && mv -f -- "$p.part" "$p" || { rm -f -- "$p.part"; exit 1; }`;
+
+const ARCHIVE = /\.(zip|jar|war|ear|apk|whl|nupkg|7z|rar|tar|tgz|tbz2?|txz|tzst|tar\.(gz|bz2|xz|zst|lz|lzma|z)|gz|bz2|xz|zst|lz4)$/i;
+export const isArchive = (name: string) => ARCHIVE.test(name);
+
+/** Extracts next to the archive into a new folder named after it (name-2, name-3… if taken), or for a
+ *  single compressed file (.gz/.xz/…) into a new file without the extension. Last output line = what was made.
+ *  Uses whatever the machine has: unzip / python3 / tar / 7z / unrar / bsdtar. */
+export const extractScript = (path: string) => `f=${sq(path)}; dir=\${f%/*}; [ -n "$dir" ] || dir=/; n=\${f##*/}
+lc=$(printf %s "$n" | tr A-Z a-z)
+has() { command -v "$1" >/dev/null 2>&1; }
+free() { t="$dir/$1"; i=1; while [ -e "$t" ]; do i=$((i+1)); t="$dir/$1-$i"; done; }
+mk() { free "$1"; mkdir -- "$t" || exit 1; }
+need() { echo "No tool on this machine can open $n (install $1)" >&2; rmdir -- "$t" 2>/dev/null; exit 127; }
+one() { free "\${n%.*}"; "$@" -dc -- "$f" > "$t" || { rm -f -- "$t"; exit 1; }; }
+case $lc in
+  *.tar|*.tar.*|*.tgz|*.tbz|*.tbz2|*.txz|*.tzst) b=\${n%.*}; case $lc in *.tar.*) b=\${b%.*};; esac; mk "$b"
+    tar -xf "$f" -C "$t" || exit 1;;
+  *.zip|*.jar|*.war|*.ear|*.apk|*.whl|*.nupkg) mk "\${n%.*}"
+    if has unzip; then unzip -q -o "$f" -d "$t" || exit 1
+    elif has python3; then python3 -m zipfile -e "$f" "$t" || exit 1
+    elif has bsdtar; then bsdtar -xf "$f" -C "$t" || exit 1
+    else need unzip; fi;;
+  *.7z|*.rar) mk "\${n%.*}"
+    for c in 7zz 7z 7za; do has $c && { $c x -y -o"$t" -- "$f" >/dev/null || exit 1; echo "$t"; exit 0; }; done
+    if [ "\${lc##*.}" = rar ] && has unrar; then unrar x -o+ -inul "$f" "$t/" || exit 1
+    elif has bsdtar; then bsdtar -xf "$f" -C "$t" || exit 1
+    else need p7zip; fi;;
+  *.gz) one gzip;; *.bz2) one bzip2;; *.xz) one xz;; *.zst) one zstd;; *.lz4) one lz4;;
+  *) echo "Not an archive: $n" >&2; exit 2;;
+esac
+echo "$t"`;

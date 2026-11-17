@@ -12,7 +12,7 @@ import { safeMd as calMd, toggleTask } from "./notes";
 import { createMdEditor, setImageResolver } from "./mdedit";
 import { createSqlEditor } from "./sqledit";
 import manualMd from "./manual.md?raw";
-import { fmtSize, joinPath, listScript, parentOf, parseListing, PREVIEW_BYTES, readScript, MEDIA_MAX, mimeFor, mediaScript, writeScript, sudoWriteScript, newFileScript, mkdirScript, modeFor, type Entry } from "./files";
+import { fmtSize, joinPath, listScript, parentOf, parseListing, PREVIEW_BYTES, readScript, MEDIA_MAX, mimeFor, mediaScript, writeScript, sudoWriteScript, newFileScript, mkdirScript, modeFor, uploadScript, extractScript, isArchive, type Entry } from "./files";
 import { arg, connUrl, countSql, createSql, dbsSql, DEFAULTS, deleteSql, fksSql, fromUrl, indexSql, insertSql, isRead, KIND_LABEL, objectsSql, qid, schemaSql, selectSql, statements, structSql, toCsv, toUrl, toXlsx, truncateSql, capRows, dur, tunnelOf, updateSql, viaLocal, withDb, withPw, withSchema, schemasSql, type Col, type ConnForm, type Dialect, type Kind, type NewCol, type Sort, type Src, selectFrom, editCols, builderSql, type Qb, type JoinType, FILTER_OPS, type QbFilter } from "./basecurves";
 import { cdLine, CRON_READ, CRON_WRITE, parseCrontab, serializeCrontab, validSched, type CronLine } from "./cron";
 import { parseStats, STATS_SCRIPT, type Cpu, type Stats } from "./stats";
@@ -177,6 +177,7 @@ const ICONS = {
   chevronRight: '<path d="m9 18 6-6-6-6"/>',
   folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
   arrowUp: '<path d="m5 12 7-7 7 7M12 19V5"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
   dots: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
   corner: '<path d="m15 10 5 5-5 5"/><path d="M4 4v7a4 4 0 0 0 4 4h12"/>',
   arrowDown: '<path d="M12 5v14M19 12l-7 7-7-7"/>',
@@ -4108,6 +4109,7 @@ function connect(tab: Tab, attempt = 1, lastErr = "") {
         <button type="button" data-frefresh title="Refresh" class="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("refresh")}</button>
         <button type="button" data-fnew="file" title="New file" class="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("file")}</button>
         <button type="button" data-fnew="folder" title="New folder" class="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("folder")}</button>
+        <button type="button" data-fup title="Upload files here" class="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("upload")}</button>
         <input data-path spellcheck="false" class="ml-1 flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 font-mono text-sm outline-none focus:border-amber-500" />
       </form>
       <div class="flex min-h-0 flex-1">
@@ -4116,6 +4118,7 @@ function connect(tab: Tab, attempt = 1, lastErr = "") {
           <div class="flex items-center gap-2 border-b border-zinc-800 px-4 py-2">
             <span data-fname class="min-w-0 flex-1 truncate font-mono text-sm"></span>
             <span data-fstat class="shrink-0 text-xs text-zinc-500"></span>
+            <button data-fextract class="hidden rounded-lg border border-zinc-700 px-3 py-1 text-xs text-zinc-200 hover:bg-zinc-800">Extract here</button>
             <button data-fsave disabled title="Save (Ctrl+S)" class="rounded-lg bg-amber-500 px-3 py-1 text-xs font-semibold text-zinc-950 hover:bg-amber-400 disabled:cursor-default disabled:opacity-40">Save</button>
             <button data-fx title="Close preview" class="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200">${icon("x", "h-3.5 w-3.5")}</button>
           </div>
@@ -4431,6 +4434,7 @@ function filesPage(sid: number, connId: number, root: HTMLElement) {
   hiddenBox.checked = localStorage.showHidden === "1"; // default: hide dotfiles
   hiddenBox.onchange = () => ((localStorage.showHidden = hiddenBox.checked ? "1" : "0"), render(last));
   const run = (command: string) => invoke<ExecOut>("remote_exec", { sid, command });
+  const fail = (m: string) => list.insertAdjacentHTML("afterbegin", `<p class="px-3 py-2 font-mono text-xs text-red-400">${esc(m)}</p>`);
   const showPrev = (show: boolean) => {
     q("[data-fprev]").classList.toggle("hidden", !show);
     q("[data-fprev]").classList.toggle("flex", show);
@@ -4471,7 +4475,21 @@ function filesPage(sid: number, connId: number, root: HTMLElement) {
     list.querySelectorAll<HTMLElement>("[data-fi]").forEach((b) => {
       const e = entries[+b.dataset.fi!];
       b.onclick = () => (e.dir ? go(joinPath(cur, e.name)) : preview(e));
+      if (!e.dir) b.oncontextmenu = (ev) => contextMenu(ev, [["Download", "download", () => download(e)]]);
     });
+  }
+
+  // ponytail: whole file pulled as base64 into memory; stream in chunks if multi-GB downloads matter
+  async function download(e: Entry) {
+    list.insertAdjacentHTML("afterbegin", `<p data-fdlmsg class="px-3 py-2 text-xs text-zinc-400">Downloading ${esc(e.name)} (${fmtSize(e.size)})…</p>`);
+    const r = await run(mediaScript(joinPath(cur, e.name))).catch((err) => ({ out: String(err), code: 1 }));
+    list.querySelector("[data-fdlmsg]")?.remove();
+    if (r.code) return void fail(`Download of ${e.name} failed: ${r.out.trim() || `exit ${r.code}`}`);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([Uint8Array.from(atob(r.out.trim()), (c) => c.charCodeAt(0))]));
+    a.download = e.name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
   // ---- editor: changes stay local until Save ----
@@ -4529,7 +4547,9 @@ function filesPage(sid: number, connId: number, root: HTMLElement) {
     body.textContent = "Loading…";
     showEditor(false);
     showPrev(true);
+    q("[data-fextract]").classList.toggle("hidden", !isArchive(e.name));
     try {
+      if (isArchive(e.name)) return void ((body.textContent = "Archive. Extract here unpacks it into a new folder next to it."), stat(fmtSize(e.size)));
       const mime = mimeFor(e.name);
       if (mime) return await showMedia(path, e, mime);
       const r = await run(readScript(path));
@@ -4590,7 +4610,6 @@ function filesPage(sid: number, connId: number, root: HTMLElement) {
     b.onclick = async () => {
       const name = await inputBox(dir ? "New folder" : "New file", joinPath(cur, ""), "Create", dir ? "folder" : "file", dir ? "folder-name" : "filename.txt");
       if (!name) return;
-      const fail = (m: string) => list.insertAdjacentHTML("afterbegin", `<p class="px-3 py-2 font-mono text-xs text-red-400">${esc(m)}</p>`);
       if (name.includes("/")) return void fail(`Name can't contain "/"`);
       const path = joinPath(cur, name);
       const r = await run(dir ? mkdirScript(path) : newFileScript(path)).catch((e) => ({ out: String(e), code: 1 }));
@@ -4599,6 +4618,42 @@ function filesPage(sid: number, connId: number, root: HTMLElement) {
       else if (!dir) preview({ name, dir: false, size: 0, mtime: "" }); // straight into the editor
     };
   });
+  q("[data-fextract]").onclick = async () => {
+    const path = q("[data-fname]").textContent!;
+    stat("Extracting…");
+    const r = await run(extractScript(path)).catch((e) => ({ out: String(e), code: 1 }));
+    if (r.code) stat(`Extract failed: ${r.out.trim() || `exit ${r.code}`}`, "text-red-400");
+    else stat(`✓ Extracted to ${r.out.trim().split("/").pop()}`, "text-emerald-400");
+    go(cur);
+  };
+  // ponytail: whole file read into memory and sent as base64; stream in chunks if multi-GB uploads matter
+  q("[data-fup]").onclick = async () => {
+    const inp = Object.assign(document.createElement("input"), { type: "file", multiple: true });
+    const files = await new Promise<File[]>((res) => {
+      inp.onchange = () => res([...(inp.files ?? [])]);
+      inp.oncancel = () => res([]);
+      inp.click();
+    });
+    const dir = cur;
+    const taken = files.filter((f) => last.some((e) => e.name === f.name));
+    if (taken.length && !(await confirmBox("Replace files?", `Already in ${dir}: ${taken.map((f) => f.name).join(", ")}`, "Replace"))) return;
+    for (const [i, f] of files.entries()) {
+      list.insertAdjacentHTML("afterbegin", `<p data-fupmsg class="px-3 py-2 text-xs text-zinc-400">Uploading ${i + 1}/${files.length}: ${esc(f.name)} (${fmtSize(f.size)})…</p>`);
+      const b64 = await new Promise<string>((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(String(fr.result).replace(/^[^,]*,/, ""));
+        fr.onerror = () => rej(fr.error);
+        fr.readAsDataURL(f);
+      });
+      const r = await invoke<ExecOut>("remote_exec", { sid, command: uploadScript(joinPath(dir, f.name)), stdin: b64 }).catch((e) => ({ out: String(e), code: 1 }));
+      list.querySelector("[data-fupmsg]")?.remove();
+      if (r.code) {
+        await go(cur);
+        return void fail(`Upload of ${f.name} failed: ${r.out.trim() || `exit ${r.code}`}`);
+      }
+    }
+    if (files.length) go(cur);
+  };
   q<HTMLFormElement>("[data-fbar]").onsubmit = (e) => (e.preventDefault(), go(input.value.trim() || "~"));
   q("[data-fx]").onclick = async () => {
     if (!(await canLeave())) return;
