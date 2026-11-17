@@ -13,7 +13,7 @@ import { createMdEditor, setImageResolver } from "./mdedit";
 import { createSqlEditor } from "./sqledit";
 import manualMd from "./manual.md?raw";
 import { fmtSize, joinPath, listScript, parentOf, parseListing, PREVIEW_BYTES, readScript, MEDIA_MAX, mimeFor, mediaScript, writeScript, sudoWriteScript, newFileScript, mkdirScript, modeFor, uploadScript, extractScript, isArchive, type Entry } from "./files";
-import { arg, connUrl, countSql, createSql, dbsSql, DEFAULTS, deleteSql, fksSql, fromUrl, indexSql, insertSql, isRead, KIND_LABEL, objectsSql, qid, schemaSql, selectSql, statements, structSql, toCsv, toUrl, toXlsx, truncateSql, capRows, dur, tunnelOf, updateSql, viaLocal, withDb, withPw, withSchema, schemasSql, type Col, type ConnForm, type Dialect, type Kind, type NewCol, type Sort, type Src, selectFrom, editCols, builderSql, type Qb, type JoinType, FILTER_OPS, type QbFilter } from "./basecurves";
+import { arg, connUrl, countSql, createSql, dbsSql, DEFAULTS, deleteSql, fksSql, fromUrl, indexSql, insertSql, isRead, KIND_LABEL, objectsSql, qid, schemaSql, selectSql, statements, structSql, toCsv, toUrl, toXlsx, truncateSql, capRows, dur, tunnelOf, updateSql, viaLocal, withDb, withPw, withSchema, schemasSql, type Col, type ConnForm, type Dialect, type Kind, type NewCol, type Ref, KINDS, kindType, defSql, slug, type ColKind, parseCreate, createOrder, type Sort, type Src, selectFrom, editCols, builderSql, type Qb, type JoinType, FILTER_OPS, type QbFilter } from "./basecurves";
 import { cdLine, CRON_READ, CRON_WRITE, parseCrontab, serializeCrontab, validSched, type CronLine } from "./cron";
 import { parseStats, STATS_SCRIPT, type Cpu, type Stats } from "./stats";
 import { fetch as httpFetch } from "@tauri-apps/plugin-http";
@@ -850,6 +850,43 @@ async function app() {
             <div id="bc-er" class="min-h-0 flex-1 overflow-auto bg-[radial-gradient(circle,rgb(113_113_122/0.18)_1px,transparent_1px)] [background-size:20px_20px]"></div>
           </section>
 
+          <section data-view="newtable" class="hidden min-h-0 flex-1 flex-col">
+            <!-- 1) project dashboard: pick or make a project first -->
+            <div id="bc-pj-home" class="flex min-h-0 flex-1 flex-col overflow-auto p-6">
+              <div class="flex items-baseline gap-3"><h2 class="text-lg font-semibold">Database projects</h2><span class="text-xs text-zinc-500">Design tables on a canvas, then create them in the database</span></div>
+              <div id="bc-pj-list" class="mt-5 grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-3"></div>
+            </div>
+            <!-- 2) the project's canvas: one ER box per table -->
+            <form id="bc-nt-form" class="hidden min-h-0 flex-1 flex-col">
+              <div class="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-zinc-800 bg-zinc-900/60 px-2 py-1 text-xs" title="Where the tables are created">
+                <button type="button" id="bc-pj-back" title="All projects" class="flex items-center gap-1 rounded-md px-2 py-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">${icon("chevronLeft", "h-3.5 w-3.5")} Projects</button>
+                <span id="bc-pj-name" class="mr-2 font-semibold text-zinc-100"></span>
+                <span class="px-1 text-zinc-500">Create in:</span>${ctxBar("n")}</div>
+              <div class="flex shrink-0 items-center gap-1 border-b border-zinc-800 px-2 py-1 text-xs">
+                <button type="button" id="bc-nt-addtable" class="flex items-center gap-1.5 rounded-md px-2 py-1 text-amber-400 hover:bg-zinc-800">${icon("table", "h-3.5 w-3.5")} Add table</button>
+                <span class="ml-1 text-zinc-500">Drag a table by its icon · click a table to select it</span>
+                <p id="bc-nt-msg" class="ml-2 min-w-0 flex-1 truncate font-mono text-red-400"></p>
+                <button type="button" id="bc-nt-query" class="flex items-center gap-1.5 rounded-md px-3 py-1 text-zinc-300 hover:bg-zinc-800">${icon("code", "h-3.5 w-3.5")} Open in Query</button>
+                <button title="Create the selected table in the database" class="flex items-center gap-1.5 rounded-md border border-amber-500/60 px-3 py-1 text-amber-300 hover:bg-amber-500/10">${icon("plus", "h-3.5 w-3.5")} Create table</button>
+                <button type="button" id="bc-nt-all" title="Create every table not yet in the database — referenced tables first" class="flex items-center gap-1.5 rounded-md bg-amber-500 px-3 py-1 font-medium text-black hover:bg-amber-400">${icon("playAll", "h-3.5 w-3.5")} Create all</button>
+              </div>
+              <div id="bc-nt-cv" class="relative min-h-0 flex-1 overflow-auto bg-[radial-gradient(circle,rgb(113_113_122/0.18)_1px,transparent_1px)] [background-size:20px_20px]"></div>
+              <div class="max-h-[45%] shrink-0 overflow-auto border-t border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                <details id="bc-nt-det" class="text-xs text-zinc-500"><summary class="flex cursor-pointer select-none items-center gap-2 hover:text-zinc-300">Show SQL of the selected table
+                    <button type="button" id="bc-nt-pen" title="Edit the SQL, then Verify to redraw the table from it" class="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-amber-400">${icon("pencil", "h-3.5 w-3.5")}</button></summary>
+                  <pre id="bc-nt-sql" class="mt-2 overflow-auto rounded-lg border border-zinc-800 bg-zinc-950/90 p-3 font-mono text-zinc-400"></pre>
+                  <div id="bc-nt-ed" class="mt-2 hidden flex-col gap-2">
+                    <textarea id="bc-nt-sqlin" spellcheck="false" rows="10" class="w-full resize-y rounded-lg border border-amber-500 bg-zinc-950 p-3 font-mono text-zinc-200 outline-none"></textarea>
+                    <div class="flex items-center gap-2">
+                      <p id="bc-nt-vmsg" class="min-w-0 flex-1 font-mono text-red-400"></p>
+                      <button type="button" id="bc-nt-vcancel" class="rounded-md px-3 py-1 text-zinc-400 hover:bg-zinc-800">Cancel</button>
+                      <button type="button" id="bc-nt-verify" title="Check the SQL and redraw the table from it (does not create it)" class="flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1 font-medium text-white hover:bg-emerald-500">${icon("check", "h-3.5 w-3.5")} Verify</button>
+                    </div>
+                  </div></details>
+              </div>
+            </form>
+          </section>
+
           <section data-view="query" class="hidden min-h-0 flex-1 flex-col">
             <div class="flex shrink-0 items-end gap-1 border-b border-zinc-800 px-2 pt-1 text-xs">
               <div id="bc-qtabs" class="flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto"></div>
@@ -968,26 +1005,6 @@ async function app() {
           <div class="flex justify-end gap-2">
             <button value="" formnovalidate class="rounded-lg px-4 py-2 text-sm text-zinc-400 hover:bg-zinc-800">Cancel</button>
             <button value="ok" class="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-black hover:bg-amber-400">Connect</button>
-          </div>
-        </form>
-      </dialog>
-      <dialog id="bc-nt" class="fixed inset-0 m-auto h-fit w-[46rem] max-w-[94vw] rounded-2xl border border-zinc-800 bg-zinc-900 p-0 text-zinc-100 backdrop:bg-black/70">
-        <form id="bc-nt-form" class="space-y-3 p-6 text-sm">
-          <h2 class="text-lg font-semibold">New Table</h2>
-          <input name="table" required placeholder="Table name" autocomplete="off" class="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono outline-none focus:border-amber-500" />
-          <div class="grid grid-cols-[1fr_10rem_2.5rem_2.5rem_2.5rem_9rem_1.5rem] items-center gap-x-2 gap-y-1.5 text-xs">
-            <span class="text-zinc-500">Column</span><span class="text-zinc-500">Type</span><span class="text-center text-zinc-500" title="Primary key">PK</span>
-            <span class="text-center text-zinc-500" title="NOT NULL">NN</span><span class="text-center text-zinc-500" title="Auto increment">Auto</span><span class="text-zinc-500">Default</span><span></span>
-            <div id="bc-nt-cols" class="contents"></div>
-          </div>
-          <button type="button" id="bc-nt-add" class="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-amber-400 hover:bg-zinc-800">${icon("plus", "h-3.5 w-3.5")} Add column</button>
-          <datalist id="bc-types"></datalist>
-          <pre id="bc-nt-sql" class="max-h-40 overflow-auto rounded-lg border border-zinc-800 bg-zinc-950 p-3 font-mono text-xs text-zinc-400"></pre>
-          <p id="bc-nt-msg" class="min-h-4 font-mono text-xs text-red-400"></p>
-          <div class="flex justify-end gap-2">
-            <button type="button" id="bc-nt-cancel" class="rounded-lg px-4 py-2 text-zinc-400 hover:bg-zinc-800">Cancel</button>
-            <button type="button" id="bc-nt-query" class="rounded-lg px-4 py-2 text-zinc-300 hover:bg-zinc-800">Open in Query</button>
-            <button class="rounded-lg bg-amber-500 px-4 py-2 font-medium text-black hover:bg-amber-400">Create</button>
           </div>
         </form>
       </dialog>
@@ -2018,7 +2035,7 @@ async function app() {
   const caret = (open: boolean) => `<span class="w-3 shrink-0 text-zinc-500">${icon(open ? "arrowDown" : "chevronRight", "h-3 w-3")}</span>`;
 
   // ----- views -----
-  type View = "main" | "objects" | "data" | "query" | "builder" | "er";
+  type View = "main" | "objects" | "data" | "query" | "builder" | "er" | "newtable";
   let bcV: View = "objects"; // shown in the bottom-left path
   let bcStale = false, bcErDirty = true; // table / diagram changed by a query; redraw when shown again
   const bcView = (v: View) => {
@@ -2066,7 +2083,7 @@ async function app() {
   const qSel = (id: string) => $<HTMLSelectElement>(id);
   const bcQBar = () => {
     if (bcV === "builder") void qbSync(false); // refresh the builder for the now-selected connection
-    for (const p of ["q", "b"]) {
+    for (const p of ["q", "b", "n"]) {
       qSel(`#bc-${p}-conn`).innerHTML = (bcOn ? "" : opt("", "Not connected", true)) + dbConns.map((x) => opt(String(x.id), `${isOpen(x.id) ? "● " : ""}${x.name}`, bcOn && x.id === bcCid)).join("");
       qSel(`#bc-${p}-db`).innerHTML = bcOn && bcD !== "sqlite" ? bcDbList.map((n) => opt(n, n, n === bcCurDb)).join("") : opt("", bcOn ? "main" : "Database", true);
       qSel(`#bc-${p}-db`).disabled = !bcOn || bcD === "sqlite";
@@ -2075,8 +2092,8 @@ async function app() {
     }
   };
   // Same selects in Query and Builder; in Builder a change also re-binds the current builder tab to the new place.
-  for (const p of ["q", "b"]) {
-    const after = (run: Promise<unknown> | void) => Promise.resolve(run).finally(() => (p === "b" && bcOn && qbBind(), bcQBar()));
+  for (const p of ["q", "b", "n"]) {
+    const after = (run: Promise<unknown> | void) => Promise.resolve(run).finally(() => (p === "b" && bcOn && qbBind(), bcQBar(), p === "n" && ntPreview()));
     qSel(`#bc-${p}-conn`).onchange = () => {
       const c = dbConns.find((x) => x.id === +qSel(`#bc-${p}-conn`).value);
       if (c) void after(bcOpenConn(c));
@@ -2403,58 +2420,426 @@ async function app() {
     } catch (err) { bcMsg(String(err), true); }
   };
 
-  // ----- New Table form: column rows -> CREATE TABLE (preview kept in sync) -----
-  const ntDlg = $<HTMLDialogElement>("#bc-nt"), ntForm = $<HTMLFormElement>("#bc-nt-form"), ntCols = $("#bc-nt-cols");
+  // ----- New Table: project dashboard → canvas of ER boxes (one per table) → CREATE TABLE of the selected box -----
   const TYPES: Record<Dialect, string[]> = {
     sqlite: ["INTEGER", "TEXT", "REAL", "NUMERIC", "BLOB"],
     postgres: ["bigint", "integer", "text", "varchar(255)", "boolean", "numeric(12,2)", "timestamptz", "date", "uuid", "jsonb"],
     mysql: ["BIGINT", "INT", "VARCHAR(255)", "TEXT", "TINYINT(1)", "DECIMAL(12,2)", "DATETIME", "DATE", "JSON"],
   };
-  const CHK = "h-4 w-4 justify-self-center accent-amber-500";
-  const ntRow = (c: Partial<NewCol> = {}) => ntCols.insertAdjacentHTML("beforeend", `<div data-row class="contents">
-    <input data-f="name" required value="${esc(c.name ?? "")}" placeholder="column" class="rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 font-mono outline-none focus:border-amber-500" />
-    <input data-f="type" required list="bc-types" value="${esc(c.type ?? TYPES[bcD][1])}" class="rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 font-mono outline-none focus:border-amber-500" />
-    <input data-f="pk" type="checkbox" ${c.pk ? "checked" : ""} class="${CHK}" /><input data-f="nn" type="checkbox" ${c.nn ? "checked" : ""} class="${CHK}" />
-    <input data-f="auto" type="checkbox" ${c.auto ? "checked" : ""} class="${CHK}" />
-    <input data-f="def" placeholder="none" class="rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 font-mono outline-none focus:border-amber-500" />
-    <button type="button" data-del title="Remove column" class="rounded p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-red-400">${icon("x", "h-3.5 w-3.5")}</button></div>`);
-  const ntRead = (): NewCol[] => [...ntCols.querySelectorAll("[data-row]")].map((r) => {
-    const f = (n: string) => r.querySelector<HTMLInputElement>(`[data-f="${n}"]`)!;
-    return { name: f("name").value.trim(), type: f("type").value.trim(), pk: f("pk").checked, nn: f("nn").checked, auto: f("auto").checked, def: f("def").value };
-  });
-  const ntName = () => (ntForm.elements.namedItem("table") as HTMLInputElement).value.trim();
-  const ntSql = () => createSql(bcD, ntName() || "new_table", ntRead());
-  const ntPreview = () => void ($("#bc-nt-sql").textContent = ntSql() + ";");
-  ntForm.addEventListener("input", ntPreview);
-  ntCols.onclick = (e) => {
-    const del = (e.target as HTMLElement).closest("[data-del]");
-    if (del) (del.closest("[data-row]")!.remove(), ntPreview());
+  // Codeless: plain names (slugged), a "kind" instead of a SQL type, plain default values (defSql turns them into literals).
+  type NtCol = { name: string; kind: ColKind; pk?: boolean; nn?: boolean; uniq?: boolean; auto?: boolean; def?: string; ref?: Ref };
+  type NtTable = { name: string; x: number; y: number; created?: boolean; cols: (NtCol | { orm: true })[] };
+  type Project = { id: number; name: string; conn: number; db: string; schema: string; data: string; at: number };
+  const ntForm = $<HTMLFormElement>("#bc-nt-form"), ntCv = $("#bc-nt-cv");
+  let ntCols: HTMLElement = document.createElement("div"), ntBox: HTMLElement | null = null, pj: Project | null = null; // selected box + its column list
+  const GRID = "grid-cols-[1.5rem_1fr_7.5rem_2.5rem_2.5rem_2.5rem_6.5rem_1.25rem_0.75rem]";
+  const CHK = "h-3.5 w-3.5 justify-self-center accent-amber-500 disabled:opacity-20";
+  const CELL = "min-w-0 rounded bg-transparent px-1 py-0.5 outline-none hover:bg-zinc-800 focus:bg-zinc-950 focus:ring-1 focus:ring-amber-500";
+  // a row with data-ref="table|column" is a foreign key (tinted); the dot at its end starts a link drag
+  const ROW = "h-7 items-center border-t border-zinc-800 px-2 [&[data-ref]]:bg-sky-500/10 [&[data-ref]_[data-f=name]]:text-sky-300";
+  const LINK = `<span data-link title="Drag onto another table to link it (foreign key)" class="h-2.5 w-2.5 shrink-0 cursor-crosshair justify-self-center rounded-full border border-sky-400 bg-zinc-900 hover:bg-sky-400"></span>`;
+  const refOf = (r: HTMLElement): { ref?: Ref } => {
+    const [t, c] = r.dataset.ref?.split("|") ?? [];
+    return t && c ? { ref: { t, c } } : {};
   };
-  $("#bc-nt-add").onclick = () => (ntRow(), ntPreview(), ntCols.querySelector<HTMLInputElement>("[data-row]:last-child [data-f=name]")?.focus());
-  $("#bc-nt-cancel").onclick = () => ntDlg.close();
-  $("#bc-nt-query").onclick = () => (bcEditor.newTab(ntSql() + ";"), ntDlg.close(), bcView("query"));
-  $("#bc-o-new").onclick = () => {
-    ntForm.reset();
-    ntCols.innerHTML = "";
-    $("#bc-types").innerHTML = TYPES[bcD].map((t) => `<option value="${t}">`).join("");
-    ntRow({ name: "id", type: TYPES[bcD][0], pk: true, nn: true, auto: true });
-    ntRow({ name: "name", type: bcD === "sqlite" ? "TEXT" : bcD === "postgres" ? "text" : "VARCHAR(255)", nn: true });
-    $("#bc-nt-msg").textContent = "";
+  const ntRow =(c: NtCol) => ntCols.insertAdjacentHTML("beforeend", `<div data-row ${c.ref ? `data-ref="${esc(c.ref.t)}|${esc(c.ref.c)}"` : ""} class="${ROW} grid ${GRID} gap-x-1">
+    <label title="Key: the unique ID of each row" class="grid cursor-pointer place-items-center text-zinc-700 hover:text-zinc-400 has-[:checked]:text-amber-400"><input data-f="pk" type="checkbox" ${c.pk ? "checked" : ""} class="sr-only" />${icon("key", "h-3.5 w-3.5")}</label>
+    <input data-f="name" value="${esc(c.name)}" placeholder="e.g. First name" spellcheck="false" class="${CELL} text-zinc-200" />
+    <select data-f="kind" class="${CELL} text-zinc-300">${Object.entries(KINDS).map(([k, [l]]) => `<option value="${k}" ${k === c.kind ? "selected" : ""} class="bg-zinc-900">${l}</option>`).join("")}</select>
+    <input data-f="nn" type="checkbox" ${c.nn ? "checked" : ""} class="${CHK}" /><input data-f="uq" type="checkbox" ${c.uniq ? "checked" : ""} class="${CHK}" /><input data-f="auto" type="checkbox" ${c.auto ? "checked" : ""} ${c.kind === "int" ? "" : "disabled"} class="${CHK}" />
+    <input data-f="def" value="${esc(c.def ?? "")}" placeholder="—" spellcheck="false" class="${CELL} text-zinc-400 placeholder:text-zinc-700" />
+    <button type="button" data-del title="Remove column" class="grid place-items-center rounded p-0.5 text-zinc-600 hover:bg-zinc-800 hover:text-red-400">${icon("x", "h-3.5 w-3.5")}</button>${LINK}</div>`);
+  const ORM: NtCol[] = [
+    { name: "id", kind: "int", pk: true, nn: true, auto: true },
+    { name: "created_at", kind: "time", nn: true, def: "now" },
+    { name: "updated_at", kind: "time" }, // empty default = NULL
+    { name: "deleted_at", kind: "time" }, // soft delete: NULL = not deleted
+  ];
+  const ntCol = (c: NtCol): NewCol => ({ name: slug(c.name), type: kindType(bcD, c.kind), pk: !!c.pk, nn: !!c.nn, uniq: !!c.uniq, auto: c.kind === "int" && !!c.auto, def: defSql(bcD, c.kind, c.def ?? ""), ...(c.ref ? { ref: { t: slug(c.ref.t), c: slug(c.ref.c) } } : {}) });
+  /** A row as typed (name not slugged yet) — what the project file keeps. */
+  const rawCol = (r: HTMLElement): NtCol => {
+    const f = (n: string) => r.querySelector<HTMLInputElement>(`[data-f="${n}"]`)!;
+    return { name: f("name").value, kind: f("kind").value as ColKind, pk: f("pk").checked, nn: f("nn").checked, uniq: f("uq").checked, auto: f("auto").checked, def: f("def").value, ...refOf(r) };
+  };
+  const ntRead = (box = ntBox): NewCol[] => (box ? [...box.querySelectorAll<HTMLElement>("[data-row]")] : []).flatMap((r) => (r.dataset.orm !== undefined ? ORM.map(ntCol) : [ntCol(rawCol(r))]));
+  const ntNameIn = () => ntBox?.querySelector<HTMLInputElement>("[data-f=table]");
+  const ntName = () => slug(ntNameIn()?.value ?? "");
+  /** Draft SQL for the pencil editor (unnamed table → new_table, no validation). */
+  const ntSql = () => createSql(bcD, ntName() || "new_table", ntRead());
+  /** CREATE TABLE for one box; throws a readable Error when the box isn't valid yet. Preview, Open in Query and Create all use this. */
+  const boxSql = (box: HTMLElement) => {
+    const t = tnameOf(box), cols = ntRead(box);
+    const names = cols.map((c) => c.name), where = t ? `${t}: ` : "";
+    if (!cols.length) throw new Error(`${where}add at least one column`);
+    if (!t || names.some((n) => !n)) throw new Error(`${where}table and column names need at least one letter or digit`);
+    const dup = names.find((n, i) => names.indexOf(n) !== i);
+    if (dup) throw new Error(`${t}: two columns are named "${dup}"`);
+    return createSql(bcD, t, cols);
+  };
+  const ntPreview = () => {
+    let s = "Select a table";
+    if (ntBox) try { s = boxSql(ntBox) + ";"; } catch (err) { s = `-- ⚠ ${err instanceof Error ? err.message : err}\n${ntSql()};`; }
+    $("#bc-nt-sql").textContent = s;
+    ntLines();
+  };
+
+  // ----- foreign-key links: drawn from the referenced column (parent) to the FK column (child) -----
+  const tnameOf = (b: HTMLElement) => slug(b.querySelector<HTMLInputElement>("[data-f=table]")!.value);
+  const cnameOf = (r: HTMLElement) => (r.dataset.orm !== undefined ? "id" : slug(r.querySelector<HTMLInputElement>("[data-f=name]")!.value));
+  const ntRowOf = (t: string, c: string) => {
+    const box = [...ntCv.querySelectorAll<HTMLElement>("[data-box]")].find((b) => tnameOf(b) === t);
+    const row = box && [...box.querySelectorAll<HTMLElement>("[data-row]")].find((r) => (r.dataset.orm !== undefined ? ORM.some((o) => o.name === c) : cnameOf(r) === c));
+    return box && row ? { box, row } : null;
+  };
+  const midY = (b: HTMLElement, r: HTMLElement) => b.offsetTop + r.offsetTop + r.offsetHeight / 2;
+  /** Curve between two boxes: leaves from the facing sides, or loops out on the right when they overlap vertically. */
+  const ntCurve = (a: HTMLElement, ay: number, b: HTMLElement, by: number) => {
+    const aw = a.offsetWidth, bw = b.offsetWidth, ac = a.offsetLeft + aw / 2, bc = b.offsetLeft + bw / 2;
+    const [ax, bx, c1, c2] = Math.abs(ac - bc) < aw ? [a.offsetLeft + aw, b.offsetLeft + bw, a.offsetLeft + aw + 50, b.offsetLeft + bw + 50]
+      : bc > ac ? [a.offsetLeft + aw, b.offsetLeft, a.offsetLeft + aw + 60, b.offsetLeft - 60]
+      : [a.offsetLeft, b.offsetLeft + bw, a.offsetLeft - 60, b.offsetLeft + bw + 60];
+    return { d: `M${ax},${ay} C${c1},${ay} ${c2},${by} ${bx},${by}`, bx, by };
+  };
+  let ntRefRows: HTMLElement[] = [];
+  function ntLines(extra = "") {
+    const svg = ntCv.querySelector("svg") ?? (ntCv.insertAdjacentHTML("afterbegin", `<svg class="pointer-events-none absolute left-0 top-0 overflow-visible text-sky-400/70"></svg>`), ntCv.querySelector("svg")!);
+    (svg.style.width = `${ntCv.scrollWidth}px`), (svg.style.height = `${ntCv.scrollHeight}px`);
+    ntRefRows = [...ntCv.querySelectorAll<HTMLElement>("[data-row][data-ref]")];
+    svg.innerHTML = ntRefRows.map((r, i) => {
+      const [t, c] = r.dataset.ref!.split("|"), a = ntRowOf(t, c), b = r.closest<HTMLElement>("[data-box]")!;
+      if (!a) return ""; // refers to a table outside this project: no line, the tint still shows it
+      const { d, bx, by } = ntCurve(a.box, midY(a.box, a.row), b, midY(b, r));
+      return `<g data-li="${i}"><title>${esc(`${tnameOf(b)}.${cnameOf(r)} → ${t}.${c} · click to remove`)}</title>
+        <path d="${d}" fill="none" stroke="transparent" stroke-width="12" style="pointer-events:stroke;cursor:pointer"/>
+        <path d="${d}" fill="none" stroke="currentColor" stroke-width="1.75"/><circle cx="${bx}" cy="${by}" r="3.5" fill="currentColor"/></g>`;
+    }).join("") + extra;
+  }
+  /** Drop of a link drag: on a column → that column becomes the FK; on the table → a new `<table>_<column>` FK column. */
+  const ntLink = (t: string, c: string, kind: ColKind, box: HTMLElement, row: HTMLElement | null) => {
+    ntSelect(box);
+    const name = `${t}_${c}`, same = [...box.querySelectorAll<HTMLElement>("[data-row]")].find((r) => r.dataset.orm === undefined && cnameOf(r) === name);
+    const target = row && row.dataset.orm === undefined ? row : same;
+    if (target) target.dataset.ref = `${t}|${c}`;
+    else ntRow({ name, kind, ref: { t, c } });
     ntPreview();
-    ntDlg.showModal();
+    ntSave();
+    bcMsg(`Linked ${tnameOf(box) || "(unnamed)"}.${target ? cnameOf(target) : name} → ${t}.${c}`);
+  };
+  /** Keep links pointing at a table / column when it is renamed. */
+  const ntRename = (from: string, to: string) => {
+    if (!from || from === to) return;
+    for (const r of ntCv.querySelectorAll<HTMLElement>("[data-row][data-ref]")) {
+      const [t, c] = r.dataset.ref!.split("|");
+      r.dataset.ref = from.includes("|") ? (`${t}|${c}` === from ? to : r.dataset.ref!) : t === from ? `${to}|${c}` : r.dataset.ref!;
+    }
+  };
+
+  // ----- project file: tables + positions, autosaved to the app database -----
+  void db.execute("CREATE TABLE IF NOT EXISTS bc_projects (id INTEGER PRIMARY KEY, name TEXT NOT NULL, conn INTEGER NOT NULL, db TEXT NOT NULL, schema TEXT NOT NULL, data TEXT NOT NULL, at INTEGER NOT NULL)");
+  const pjTables = (p: Project): NtTable[] => { try { return JSON.parse(p.data); } catch { return []; } };
+  const ntDump = (): NtTable[] => [...ntCv.querySelectorAll<HTMLElement>("[data-box]")].map((b) => ({
+    name: b.querySelector<HTMLInputElement>("[data-f=table]")!.value, x: b.offsetLeft, y: b.offsetTop, created: b.dataset.created === "1" || undefined,
+    cols: [...b.querySelectorAll<HTMLElement>("[data-row]")].map((r) => (r.dataset.orm !== undefined ? { orm: true as const } : rawCol(r))),
+  }));
+  let ntSaveT = 0;
+  const ntSaveNow = () => {
+    clearTimeout(ntSaveT);
+    if (!pj) return Promise.resolve();
+    const p = pj;
+    return db.execute("UPDATE bc_projects SET data = $1, at = $2 WHERE id = $3", [(p.data = JSON.stringify(ntDump())), (p.at = Date.now()), p.id])
+      .then(() => {}, (err) => bcMsg(String(err), true));
+  };
+  const ntSave = () => (clearTimeout(ntSaveT), (ntSaveT = window.setTimeout(ntSaveNow, 400)));
+
+  // ----- boxes on the canvas -----
+  const ntSelect = (box: HTMLElement | null) => {
+    if (box === ntBox) return;
+    ntCv.querySelectorAll("[data-box]").forEach((b) => b.classList.toggle("on", b === box));
+    ntBox = box;
+    ntCols = box?.querySelector<HTMLElement>("[data-cols]") ?? document.createElement("div");
+    ntEdit(false);
+    ntPreview();
+  };
+  /** Draw one table box and fill its columns. */
+  const ntAddBox = (t: NtTable) => {
+    ntCv.insertAdjacentHTML("beforeend", `<div data-box ${t.created ? 'data-created="1"' : ""} style="left:${t.x}px;top:${t.y}px" class="group absolute w-[34rem] overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 text-xs shadow-lg shadow-black/30 [&.on]:border-amber-500">
+      <div class="flex h-10 items-center gap-2 border-b border-zinc-700 bg-zinc-800 px-2 font-semibold text-zinc-100 group-[.on]:bg-amber-500/15">
+        <span data-drag title="Drag to move" class="cursor-move rounded p-1 text-emerald-400 hover:bg-zinc-700">${icon("table", "h-4 w-4")}</span>
+        <input data-f="table" value="${esc(t.name)}" placeholder="Table name, e.g. Customers" autocomplete="off" spellcheck="false" class="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:font-normal placeholder:text-zinc-600" />
+        <span data-badge class="${t.created ? "" : "hidden"} rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-normal text-emerald-400">in database</span>
+        <button type="button" data-delbox title="Remove from project (does not drop the table)" class="rounded p-1 text-zinc-500 hover:bg-zinc-700 hover:text-red-400">${icon("x", "h-3.5 w-3.5")}</button>
+      </div>
+      <div class="grid ${GRID} items-center gap-x-1 px-2 py-1 text-[10px] text-zinc-500">
+        <span class="text-center" title="Key: unique ID of each row">Key</span><span>Column name</span><span>Kind</span><span class="text-center" title="Required: must be filled in">Req.</span><span class="text-center" title="Unique: no two rows can have the same value">Uniq.</span><span class="text-center" title="Auto number: 1, 2, 3… filled in automatically">Auto</span><span title="Default value · now = current date/time · yes/no for Yes / No">Default</span><span></span><span></span>
+      </div>
+      <div data-cols></div>
+      <button type="button" data-addcol title="Add a column — pick its kind" class="flex h-8 w-full items-center justify-center gap-1.5 border-t border-dashed border-zinc-700 text-zinc-500 hover:bg-amber-500/10 hover:text-amber-400">${icon("plus", "h-4 w-4")} Add column</button>
+    </div>`);
+    const box = ntCv.lastElementChild as HTMLElement;
+    ntSelect(box);
+    for (const c of t.cols) "orm" in c ? ntOrm(false) : ntRow(c);
+    ntPreview();
+    return box;
+  };
+  const KIND_ICON: Record<ColKind, keyof typeof ICONS> = { text: "pencil", long: "book", int: "list", dec: "grid", bool: "check", date: "clock", time: "clock", json: "code" };
+  const ntAdd = (c: NtCol) => {
+    ntRow(c);
+    ntPreview();
+    ntSave();
+    if (!c.name) ntCols.querySelector<HTMLInputElement>("[data-row]:last-child [data-f=name]")?.focus();
+  };
+  /** One "orm" row on top = id, created_at, updated_at, deleted_at (ntRead expands it); replaces single rows of those names. */
+  function ntOrm(save = true) {
+    if (ntCols.querySelector("[data-orm]")) return;
+    for (const r of ntCols.querySelectorAll<HTMLElement>("[data-row]"))
+      if (ORM.some((c) => c.name === slug(r.querySelector<HTMLInputElement>("[data-f=name]")!.value))) r.remove();
+    ntCols.insertAdjacentHTML("afterbegin", `<div data-row data-orm title="id (auto number, key) · created_at (now) · updated_at (null) · deleted_at (null)" class="flex h-7 items-center gap-1.5 border-t border-zinc-800 bg-sky-500/5 px-2">
+      <span class="grid w-6 place-items-center text-amber-400">${icon("key", "h-3.5 w-3.5")}</span>
+      <span class="font-semibold text-sky-300">orm</span><span class="truncate font-mono text-[11px] text-zinc-500">id · created_at · updated_at · deleted_at</span>
+      <button type="button" data-del title="Remove" class="ml-auto grid place-items-center rounded p-0.5 text-zinc-600 hover:bg-zinc-800 hover:text-red-400">${icon("x", "h-3.5 w-3.5")}</button>${LINK}</div>`);
+    ntPreview();
+    if (save) ntSave();
+  }
+  const ntNewTable = () => {
+    const n = ntCv.querySelectorAll("[data-box]").length;
+    ntAddBox({ name: "", x: 40 + (n % 6) * 40 + ntCv.scrollLeft, y: 40 + (n % 6) * 40 + ntCv.scrollTop, cols: [{ orm: true }, { name: "name", kind: "text", nn: true }] });
+    ntNameIn()?.focus();
+    ntSave();
+  };
+  $("#bc-nt-addtable").onclick = ntNewTable;
+  // renaming a table / column carries its links along (prev = slug before this edit)
+  ntForm.addEventListener("focusin", (e) => {
+    const i = e.target as HTMLInputElement;
+    if (i.dataset.f === "table" || i.dataset.f === "name") i.dataset.prev = slug(i.value);
+  });
+  ntForm.addEventListener("input", () => (ntPreview(), ntSave()));
+  // Enter in a name/default field must not submit the form (= CREATE TABLE); it just commits the field
+  ntForm.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.target as HTMLElement).tagName === "INPUT") (e.preventDefault(), (e.target as HTMLInputElement).blur());
+  });
+  ntForm.addEventListener("change", (e) => {
+    // rename links once the edit is committed (not per keystroke, where a half-typed name can match another table)
+    const i = e.target as HTMLInputElement, now = slug(i.value), prev = i.dataset.prev ?? "", box = i.closest<HTMLElement>("[data-box]");
+    // links stay put while another box / column still has the old name (they belong to that one)
+    if (i.dataset.f === "table" && ![...ntCv.querySelectorAll<HTMLElement>("[data-box]")].some((b) => tnameOf(b) === prev)) ntRename(prev, now);
+    if (i.dataset.f === "name" && box && ![...box.querySelectorAll<HTMLElement>("[data-row]")].some((r) => cnameOf(r) === prev)) { const t = tnameOf(box); ntRename(`${t}|${prev}`, `${t}|${now}`); }
+    if (i.dataset.f === "table" || i.dataset.f === "name") i.dataset.prev = now;
+    const sel = e.target as HTMLSelectElement; // Auto no. only makes sense for whole numbers
+    if (sel.dataset.f === "kind") sel.closest("[data-row]")!.querySelector<HTMLInputElement>("[data-f=auto]")!.disabled = sel.value !== "int";
+    ntPreview();
+    ntSave();
+  });
+  ntCv.onpointerdown = (e) => {
+    const t = e.target as HTMLElement, box = t.closest<HTMLElement>("[data-box]");
+    if (box) ntSelect(box);
+    // link drag: from a column's dot to another table (or one of its columns)
+    const link = t.closest<HTMLElement>("[data-link]");
+    if (box && link && e.button === 0) {
+      e.preventDefault();
+      const row = link.closest<HTMLElement>("[data-row]")!, src = tnameOf(box), col = cnameOf(row);
+      if (!src || !col) return void bcMsg("Name the table and the column before linking", true);
+      const kind = row.dataset.orm !== undefined ? "int" : (row.querySelector<HTMLSelectElement>("[data-f=kind]")!.value as ColKind);
+      const ay = midY(box, row), at = (m: PointerEvent) => {
+        const r = ntCv.getBoundingClientRect();
+        return [m.clientX - r.left + ntCv.scrollLeft, m.clientY - r.top + ntCv.scrollTop];
+      };
+      link.setPointerCapture(e.pointerId);
+      link.onpointermove = (m) => {
+        const [x, y] = at(m), ax = x > box.offsetLeft + box.offsetWidth / 2 ? box.offsetLeft + box.offsetWidth : box.offsetLeft;
+        ntLines(`<path d="M${ax},${ay} L${x},${y}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-dasharray="5 4"/><circle cx="${x}" cy="${y}" r="4" fill="currentColor"/>`);
+      };
+      link.onpointerup = (m) => {
+        link.onpointermove = null;
+        const el = document.elementFromPoint(m.clientX, m.clientY) as HTMLElement | null, to = el?.closest<HTMLElement>("[data-box]");
+        if (to && to !== box) ntLink(src, col, kind, to, el!.closest<HTMLElement>("[data-row]"));
+        else ntLines();
+      };
+      return;
+    }
+    const handle = t.closest<HTMLElement>("[data-drag]");
+    if (!box || !handle || e.button !== 0) return;
+    const x0 = e.clientX - box.offsetLeft, y0 = e.clientY - box.offsetTop;
+    box.style.zIndex = "10";
+    handle.setPointerCapture(e.pointerId);
+    handle.onpointermove = (m) => ((box.style.left = `${Math.max(0, m.clientX - x0)}px`), (box.style.top = `${Math.max(0, m.clientY - y0)}px`), ntLines());
+    handle.onpointerup = () => ((handle.onpointermove = null), (box.style.zIndex = ""), ntSave());
+  };
+  ntCv.onclick = (e) => {
+    const t = e.target as HTMLElement;
+    const del = t.closest("[data-del]");
+    if (del) return void (del.closest("[data-row]")!.remove(), ntPreview(), ntSave());
+    const line = t.closest<SVGElement>("[data-li]"), fk = line && ntRefRows[+line.dataset.li!];
+    if (fk) return contextMenu(e, [["Remove link (foreign key)", "x", () => (delete fk.dataset.ref, ntPreview(), ntSave())]]);
+    if (t.closest("[data-delbox]")) {
+      t.closest("[data-box]")!.remove();
+      ntBox = null;
+      ntSelect(ntCv.querySelector<HTMLElement>("[data-box]"));
+      return void ntSave();
+    }
+    // + under a box opens a picker: which kind of column to add
+    if (t.closest("[data-addcol]")) contextMenu(e, [
+      ...(Object.keys(KINDS) as ColKind[]).map((k): MenuItem => [KINDS[k][0], KIND_ICON[k], () => ntAdd({ name: "", kind: k })]),
+      ["Created at (auto date & time)", "clock", () => ntAdd({ name: "created_at", kind: "time", nn: true, def: "now" })],
+      ["ORM", "database", () => ntOrm()],
+    ]);
+  };
+  $("#bc-nt-query").onclick = () => {
+    if (!ntBox) return;
+    try { bcEditor.newTab(boxSql(ntBox) + ";"), bcView("query"); } catch (err) { bcMsg(err instanceof Error ? err.message : String(err), true); }
+  };
+  // Pencil: edit the SQL by hand; Verify parses it and redraws the selected box from it (Create still does the creating).
+  function ntEdit(on: boolean) {
+    $("#bc-nt-sql").classList.toggle("hidden", on);
+    $("#bc-nt-ed").classList.toggle("hidden", !on), $("#bc-nt-ed").classList.toggle("flex", on);
+    $("#bc-nt-vmsg").textContent = "";
+    if (on) { const ta = $<HTMLTextAreaElement>("#bc-nt-sqlin"); ta.value = ntSql() + ";"; ta.focus(); }
+  }
+  $("#bc-nt-pen").onclick = (e) => {
+    e.preventDefault();
+    if (!ntBox) return;
+    $<HTMLDetailsElement>("#bc-nt-det").open = true;
+    ntEdit(true);
+  };
+  $("#bc-nt-vcancel").onclick = () => ntEdit(false);
+  $("#bc-nt-verify").onclick = () => {
+    try {
+      const { table, cols } = parseCreate(bcD, $<HTMLTextAreaElement>("#bc-nt-sqlin").value);
+      const box = ntBox!, before = tnameOf(box), oldCols = [...box.querySelectorAll<HTMLElement>("[data-row]")].flatMap((r) => (r.dataset.orm !== undefined ? ORM.map((o) => o.name) : [cnameOf(r)]));
+      ntNameIn()!.value = table;
+      ntNameIn()!.dataset.prev = slug(table);
+      ntCols.innerHTML = "";
+      cols.forEach(ntRow);
+      // carry links: table rename, and column renames matched by position when the column count didn't change
+      const after = tnameOf(box), map = new Map(oldCols.length === cols.length ? oldCols.map((o, k) => [o, slug(cols[k].name)]) : []);
+      if (before && ![...ntCv.querySelectorAll<HTMLElement>("[data-box]")].some((b) => b !== box && tnameOf(b) === before))
+        for (const r of ntCv.querySelectorAll<HTMLElement>("[data-row][data-ref]")) {
+          const [t, c] = r.dataset.ref!.split("|");
+          if (t === before) r.dataset.ref = `${after}|${map.get(c) ?? c}`;
+        }
+      ntPreview();
+      ntEdit(false);
+      ntSave();
+      bcMsg(`SQL verified — ${table}: ${cols.length} column(s) drawn. Press Create table to make it.`);
+    } catch (err) { $("#bc-nt-vmsg").textContent = err instanceof Error ? err.message : String(err); }
+  };
+
+  // ----- project dashboard -----
+  const pjShow = (canvas: boolean) => {
+    $("#bc-pj-home").classList.toggle("hidden", canvas), $("#bc-pj-home").classList.toggle("flex", !canvas);
+    ntForm.classList.toggle("hidden", !canvas), ntForm.classList.toggle("flex", canvas);
+  };
+  const pjHome = async () => {
+    await ntSaveNow();
+    pj = null;
+    pjShow(false);
+    const list = await db.select<Project[]>("SELECT * FROM bc_projects ORDER BY at DESC").catch(() => [] as Project[]);
+    $("#bc-pj-list").innerHTML = `<button type="button" data-pj-new class="grid h-32 place-items-center rounded-xl border border-dashed border-zinc-700 text-zinc-400 hover:border-amber-500 hover:bg-amber-500/5 hover:text-amber-400"><span class="flex flex-col items-center gap-1.5">${icon("plus", "h-6 w-6")} New project</span></button>`
+      + list.map((p) => {
+        const c = dbConns.find((x) => x.id === p.conn), n = pjTables(p).length;
+        return `<div data-pj="${p.id}" title="Open" class="group relative flex h-32 cursor-pointer flex-col rounded-xl border border-zinc-800 bg-zinc-900 p-4 hover:border-amber-500">
+          <span class="flex items-center gap-2 pr-6 font-semibold text-zinc-100"><span class="text-amber-400">${icon("database", "h-4 w-4")}</span><span class="truncate">${esc(p.name)}</span></span>
+          <span class="mt-1 truncate font-mono text-[11px] text-zinc-500">${esc([c?.name ?? "(deleted connection)", p.db, p.schema].filter(Boolean).join(" › "))}</span>
+          <span class="mt-auto text-xs text-zinc-500">${n} table${n === 1 ? "" : "s"} · ${esc(new Date(p.at).toLocaleString())}</span>
+          <button type="button" data-pj-del title="Delete project (tables in the database stay)" class="absolute right-2 top-2 hidden rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-red-400 group-hover:block">${icon("trash", "h-3.5 w-3.5")}</button></div>`;
+      }).join("");
+  };
+  const pjWhere = (p: Project) => [dbConns.find((c) => c.id === p.conn)?.name ?? "(deleted connection)", p.db, p.schema].filter(Boolean).join(" › ");
+  const pjHere = (p: Project) => bcOn && bcCid === p.conn && bcCurDb === p.db && bcCurSchema === p.schema;
+  /** Make the project's own connection › db › schema the active one; false = can't (deleted, cancelled, failed). Never fall back to another db. */
+  const pjEnsure = async (p: Project) => {
+    if (pjHere(p)) return true;
+    const c = dbConns.find((x) => x.id === p.conn);
+    if (!c) return false;
+    try {
+      if (!isOpen(c.id)) await bcOpenConn(c);
+      else if (bcCid !== c.id) bcActivate(c.id);
+      if (bcOn && bcCid === c.id && p.db && bcCurDb !== p.db) await bcConnect(withDb(bcUrl, p.db), c.id, true);
+      if (bcOn && bcCid === c.id && p.schema && bcCurSchema !== p.schema) await bcConnect(withSchema(bcUrl, p.schema), c.id, true);
+    } catch (err) { bcMsg(String(err), true); }
+    return pjHere(p);
+  };
+  /** Gate for anything that runs DDL: the project's database must be the active one. */
+  const pjReady = async () => {
+    if (pj && (await pjEnsure(pj))) return true;
+    $("#bc-nt-msg").textContent = pj ? `Can't use this project's database (${pjWhere(pj)}) — connect to it first. Nothing was created.` : "Open a project first";
+    return false;
+  };
+  const pjOpen = async (p: Project) => {
+    const ok = await pjEnsure(p); // the project's own connection › db › schema
+    pj = p;
+    $("#bc-pj-name").textContent = p.name;
+    ntCv.innerHTML = "";
+    ntBox = null;
+    for (const t of pjTables(p)) ntAddBox(t);
+    ntBox = null;
+    ntSelect(ntCv.querySelector<HTMLElement>("[data-box]"));
+    $("#bc-nt-msg").textContent = ok ? "" : `Not connected to this project's database (${pjWhere(p)}) — Create will try to connect first.`;
+    pjShow(true);
+  };
+  $("#bc-pj-list").onclick = async (e) => {
+    const t = e.target as HTMLElement;
+    if (t.closest("[data-pj-new]")) {
+      if (!bcOn) return void bcMsg("Connect to the database the project is for first", true);
+      const name = await inputBox("New project", [bcConn()?.name, bcCurDb, bcCurSchema].filter(Boolean).join(" › "), "Create", "folder", "Project name");
+      if (!name) return;
+      const r = await db.execute("INSERT INTO bc_projects (name, conn, db, schema, data, at) VALUES ($1, $2, $3, $4, '[]', $5)", [name, bcCid, bcCurDb ?? "", bcCurSchema ?? "", Date.now()]);
+      const p = (await db.select<Project[]>("SELECT * FROM bc_projects WHERE id = $1", [r.lastInsertId]))[0];
+      await pjOpen(p);
+      return ntNewTable();
+    }
+    const card = t.closest<HTMLElement>("[data-pj]");
+    if (!card) return;
+    if (t.closest("[data-pj-del]")) {
+      if (!(await confirmBox("Delete project?", "Only the design is deleted — tables already created stay in the database.", "Delete"))) return;
+      await db.execute("DELETE FROM bc_projects WHERE id = $1", [+card.dataset.pj!]);
+      return pjHome();
+    }
+    const p = (await db.select<Project[]>("SELECT * FROM bc_projects WHERE id = $1", [+card.dataset.pj!]))[0];
+    if (p) await pjOpen(p);
+  };
+  $("#bc-pj-back").onclick = () => void pjHome();
+  $("#bc-o-new").onclick = () => (bcView("newtable"), void pjHome());
+  const markCreated = (box: HTMLElement) => ((box.dataset.created = "1"), box.querySelector("[data-badge]")!.classList.remove("hidden"));
+  const ntDone = async (msg: string) => {
+    $("#bc-nt-msg").textContent = "";
+    ntSave();
+    bcMsg(msg);
+    await bcObjects();
+    bcSchema();
   };
   ntForm.onsubmit = async (e) => {
     e.preventDefault();
-    if (!ntRead().length) return void ($("#bc-nt-msg").textContent = "Add at least one column");
+    if (!ntBox) return void ($("#bc-nt-msg").textContent = "Add a table first");
+    const box = ntBox;
+    if (!(await pjReady())) return;
     try {
-      await bcDb.execute(ntSql());
-      const name = ntName();
-      ntDlg.close();
-      bcMsg(`Created ${name}`);
-      await bcObjects();
-      bcSchema();
-      bcLoad(name, "struct");
-    } catch (err) { $("#bc-nt-msg").textContent = String(err); }
+      await bcDb.execute(boxSql(box));
+      markCreated(box);
+      await ntDone(`Created ${tnameOf(box)}`);
+    } catch (err) { $("#bc-nt-msg").textContent = err instanceof Error ? err.message : String(err); }
+  };
+  // Create all: every box not yet in the database, parents before children; stops at the first failure.
+  $("#bc-nt-all").onclick = async () => {
+    const todo = [...ntCv.querySelectorAll<HTMLElement>("[data-box]")].filter((b) => b.dataset.created !== "1");
+    if (!todo.length) return void bcMsg("Every table in this project is already in the database");
+    if (!(await pjReady())) return;
+    const made: string[] = [];
+    try {
+      const sql = new Map(todo.map((b) => [tnameOf(b), { box: b, sql: boxSql(b) }])); // validate all before running any
+      if (sql.size < todo.length) throw new Error("Two tables have the same name");
+      const deps = (b: HTMLElement) => [...b.querySelectorAll<HTMLElement>("[data-row][data-ref]")].map((r) => r.dataset.ref!.split("|")[0]);
+      for (const t of createOrder(todo.map((b) => ({ name: tnameOf(b), deps: deps(b) })))) {
+        const { box, sql: s } = sql.get(t)!;
+        ntSelect(box);
+        try { await bcDb.execute(s); } catch (err) { throw new Error(`${t}: ${err}`); }
+        markCreated(box);
+        made.push(t);
+      }
+      await ntDone(`Created ${made.length} table(s): ${made.join(", ")}`);
+    } catch (err) {
+      $("#bc-nt-msg").textContent = (made.length ? `Created ${made.join(", ")} · stopped at ` : "") + (err instanceof Error ? err.message : String(err));
+      if (made.length) await ntDone(`Created ${made.join(", ")} before an error`);
+    }
   };
   const bcDrop = async (name: string) => {
     const o = bcObjs.find((x) => x.name === name);
@@ -3697,7 +4082,7 @@ async function app() {
     if (s === "basecurves") {
       const c = bcConn();
       if (!c) return "/basecurves";
-      const tail = bcV === "data" ? `${bcTable}${bcMode === "struct" ? "/structure" : bcMode === "er" ? "/er-diagram" : ""}` : bcV === "query" ? "query" : bcV === "builder" ? `builder/${qb.name.toLowerCase().replace(/\s+/g, "-")}` : bcV === "er" ? "er-diagram" : bcV === "main" ? "main" : bcSel;
+      const tail = bcV === "data" ? `${bcTable}${bcMode === "struct" ? "/structure" : bcMode === "er" ? "/er-diagram" : ""}` : bcV === "query" ? "query" : bcV === "builder" ? `builder/${qb.name.toLowerCase().replace(/\s+/g, "-")}` : bcV === "er" ? "er-diagram" : bcV === "newtable" ? (pj ? `projects/${pj.name}` : "projects") : bcV === "main" ? "main" : bcSel;
       return ["/basecurves", c.name, bcCurDb, bcCurSchema, tail].filter(Boolean).join("/");
     }
     if (s === "post") {

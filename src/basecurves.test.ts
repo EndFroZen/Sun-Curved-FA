@@ -67,6 +67,68 @@ assert.equal(createSql("mysql", "u", [nc("id", "INT", { pk: true, auto: true })]
 assert.equal(createSql("sqlite", "u", [nc("a", "TEXT", { pk: true }), nc("b", "TEXT", { pk: true })]), 'CREATE TABLE "u" (\n  "a" TEXT,\n  "b" TEXT,\n  PRIMARY KEY ("a", "b")\n)');
 console.log("ddl ok");
 
+import { defSql, slug, kindType } from "./basecurves.ts";
+assert.equal(slug("  First Name! "), "first_name");
+assert.equal(kindType("mysql", "bool"), "TINYINT(1)");
+assert.equal(defSql("postgres", "text", "it's"), "'it''s'");
+assert.equal(defSql("mysql", "date", "now"), "(CURRENT_DATE)");
+assert.equal(defSql("sqlite", "time", "Now"), "CURRENT_TIMESTAMP");
+assert.equal(defSql("postgres", "bool", "yes"), "TRUE");
+assert.equal(defSql("sqlite", "bool", "no"), "0");
+assert.equal(defSql("mysql", "int", "-5"), "-5");
+assert.equal(defSql("mysql", "int", "abc"), "'abc'");
+assert.equal(defSql("sqlite", "text", "  "), "");
+console.log("codeless ok");
+
+import { parseCreate } from "./basecurves.ts";
+// round trip: designer → createSql → parseCreate gives the same columns back
+const pgSql = createSql("postgres", "my t", [
+  nc("id", "integer", { pk: true, nn: true, auto: true }), nc("note", "varchar(255)", { def: "'it''s, ok'" }),
+  nc("paid", "boolean", { def: "TRUE" }), nc("at", "timestamptz", { nn: true, def: "CURRENT_TIMESTAMP" }), nc("price", "numeric(12,2)", { def: "9.5" })]);
+assert.deepEqual(parseCreate("postgres", pgSql + ";"), { table: "my t", cols: [
+  { name: "id", kind: "int", pk: true, nn: true, auto: true, def: "", uniq: false },
+  { name: "note", kind: "text", pk: false, nn: false, auto: false, def: "it's, ok", uniq: false },
+  { name: "paid", kind: "bool", pk: false, nn: false, auto: false, def: "yes", uniq: false },
+  { name: "at", kind: "time", pk: false, nn: true, auto: false, def: "now", uniq: false },
+  { name: "price", kind: "dec", pk: false, nn: false, auto: false, def: "9.5", uniq: false }] });
+const my = parseCreate("mysql", "create table if not exists `a` (`x` INT AUTO_INCREMENT, y TEXT, d DATE DEFAULT (CURRENT_DATE), PRIMARY KEY (`x`))");
+assert.equal(my.table, "a");
+assert.deepEqual(my.cols.map((c) => [c.name, c.kind, c.pk, c.auto, c.def]), [["x", "int", true, true, ""], ["y", "long", false, false, ""], ["d", "date", false, false, "now"]]);
+assert.equal(parseCreate("sqlite", 'CREATE TABLE t ("id" INTEGER PRIMARY KEY, n TEXT)').cols[0].auto, true);
+assert.equal(parseCreate("postgres", "create table t (a double precision not null)").cols[0].kind, "dec");
+assert.throws(() => parseCreate("postgres", "create table t (a uuid)"), /uuid/);
+// review fixes: Thai marks kept, SQLite kinds round-trip, MySQL TEXT/JSON defaults, quoted keywords, comments, unanchored int
+assert.equal(slug("ชื่อ อุปกรณ์"), "ชื่อ_อุปกรณ์");
+const sqRt = parseCreate("sqlite", createSql("sqlite", "t", [
+  nc("at", kindType("sqlite", "time"), { nn: true, def: defSql("sqlite", "time", "now") }), nc("ok", kindType("sqlite", "bool"), { def: defSql("sqlite", "bool", "yes") }),
+  nc("d", kindType("sqlite", "date")), nc("j", kindType("sqlite", "json"))]));
+assert.deepEqual(sqRt.cols.map((c) => [c.kind, c.def]), [["time", "now"], ["bool", "yes"], ["date", ""], ["json", ""]]);
+assert.equal(defSql("mysql", "long", "hi"), "('hi')");
+assert.equal(defSql("mysql", "json", "{}"), "('{}')");
+assert.equal(parseCreate("mysql", "create table t (a TEXT DEFAULT ('it''s'))").cols[0].def, "it's");
+const qc = parseCreate("postgres", "create table t (\n  -- a comment\n  note text default 'not null unique check', /* x */ n int\n)").cols;
+assert.deepEqual(qc.map((c) => [c.name, c.nn, c.uniq, c.def]), [["note", false, false, "not null unique check"], ["n", false, false, ""]]);
+assert.throws(() => parseCreate("postgres", "create table t (d interval)"), /interval/);
+assert.throws(() => parseCreate("postgres", "create table t (p point)"), /point/);
+assert.equal(parseCreate("mysql", "create table t (a bigint unsigned, b int(11), c smallint)").cols.every((c) => c.kind === "int"), true);
+// foreign keys: written table-level (MySQL ignores column-level), read back from either form
+const fkSql = createSql("mysql", "orders", [nc("id", "INT", { pk: true }), nc("user_id", "INT", { ref: { t: "users", c: "id" } })]);
+assert.match(fkSql, /,\n  FOREIGN KEY \(`user_id`\) REFERENCES `users` \(`id`\)\n\)$/);
+assert.deepEqual(parseCreate("mysql", fkSql).cols[1].ref, { t: "users", c: "id" });
+assert.deepEqual(parseCreate("postgres", "create table t (a int not null references public.u(code), b int references v)").cols.map((c) => [c.nn, c.ref]),
+  [[true, { t: "u", c: "code" }], [false, { t: "v", c: "id" }]]);
+assert.throws(() => parseCreate("postgres", "create table t (a int check (a > 0))"), /CHECK/);
+import { createOrder } from "./basecurves.ts";
+assert.deepEqual(createOrder([{ name: "items", deps: ["orders", "products"] }, { name: "orders", deps: ["users", "orders"] }, { name: "users", deps: [] }, { name: "products", deps: ["outside"] }]),
+  ["users", "products", "orders", "items"]);
+assert.throws(() => createOrder([{ name: "a", deps: ["b"] }, { name: "b", deps: ["a"] }]), /loop: a, b/);
+const uqc = parseCreate("postgres", "create table t (device_code varchar(50) not null unique, b text, c int, unique (b))").cols;
+assert.deepEqual(uqc.map((c) => [c.name, c.kind, c.nn, c.uniq]), [["device_code", "text", true, true], ["b", "long", false, true], ["c", "int", false, false]]);
+assert.match(createSql("mysql", "t", [nc("a", "INT", { nn: true, uniq: true })]), /`a` INT NOT NULL UNIQUE/);
+assert.throws(() => parseCreate("postgres", "create table t (a int, b int, unique (a, b))"), /unique/i);
+assert.throws(() => parseCreate("postgres", "select 1"), /CREATE TABLE/);
+console.log("parseCreate ok");
+
 import { withSchema } from "./basecurves.ts";
 const sc = withSchema("postgres://u:p@h:5432/a", "sales");
 assert.equal(new URL(sc).searchParams.get("options"), "-c search_path=sales");

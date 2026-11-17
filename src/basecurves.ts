@@ -65,18 +65,126 @@ export const countSql = (d: Dialect, t: string, where = "") => `SELECT COUNT(*) 
 export const truncateSql = (d: Dialect, t: string) => (d === "sqlite" ? `DELETE FROM ${qid(d, t)}` : `TRUNCATE TABLE ${qid(d, t)}`);
 
 /** A column in the New Table form. `def` is a raw SQL expression ('text', 0, CURRENT_TIMESTAMP). */
-export type NewCol = { name: string; type: string; pk: boolean; nn: boolean; auto: boolean; def: string };
+/** `ref` = foreign key to table `t`, column `c`. */
+export type Ref = { t: string; c: string };
+export type NewCol = { name: string; type: string; pk: boolean; nn: boolean; auto: boolean; def: string; uniq?: boolean; ref?: Ref };
+
+/** Codeless New Table: plain-language column kinds → SQL type per dialect [sqlite, postgres, mysql]. */
+export const KINDS = {
+  text: ["Text", "TEXT", "varchar(255)", "VARCHAR(255)"],
+  long: ["Long text", "TEXT", "text", "TEXT"],
+  int: ["Number", "INTEGER", "integer", "INT"],
+  dec: ["Decimal / money", "NUMERIC", "numeric(12,2)", "DECIMAL(12,2)"],
+  // SQLite: descriptive names (any name is legal there) so Verify can read the kind back
+  bool: ["Yes / No", "BOOLEAN", "boolean", "TINYINT(1)"],
+  date: ["Date", "DATE", "date", "DATE"],
+  time: ["Date & time", "DATETIME", "timestamptz", "DATETIME"],
+  json: ["JSON", "JSON", "jsonb", "JSON"],
+} as const;
+export type ColKind = keyof typeof KINDS;
+export const kindType = (d: Dialect, k: ColKind) => KINDS[k][d === "sqlite" ? 1 : d === "postgres" ? 2 : 3];
+/** "First Name" → "first_name" (letters incl. marks such as Thai vowels/tones, digits, _ only). */
+export const slug = (s: string) => s.trim().toLowerCase().replace(/[^\p{L}\p{M}\p{N}_]+/gu, "_").replace(/^_+|_+$/g, "");
+/** A plain default typed by the user ("hello", 5, yes, now) → SQL literal; "" = no default. */
+export function defSql(d: Dialect, k: ColKind, v: string): string {
+  v = v.trim();
+  if (!v) return "";
+  if ((k === "date" || k === "time") && /^(now|today|ตอนนี้|วันนี้)$/i.test(v))
+    return k === "time" ? "CURRENT_TIMESTAMP" : d === "mysql" ? "(CURRENT_DATE)" : "CURRENT_DATE";
+  if (k === "bool") { const y = /^(yes|y|true|1|on|ใช่)$/i.test(v); return d === "postgres" ? (y ? "TRUE" : "FALSE") : y ? "1" : "0"; }
+  if ((k === "int" || k === "dec") && /^-?\d+(\.\d+)?$/.test(v)) return v;
+  const lit = `'${v.replace(/'/g, "''")}'`;
+  return d === "mysql" && (k === "long" || k === "json") ? `(${lit})` : lit; // MySQL: TEXT/JSON only take expression defaults
+}
+/** SQL type → designer kind (null = the designer has no kind for it). */
+export function kindOfType(d: Dialect, t: string): ColKind | null {
+  t = t.toLowerCase().trim();
+  if (/^(tinyint\(1\)|bool)/.test(t)) return "bool";
+  if (/^(tiny|small|medium|big)?int(eger|\d)?\b|^(small|big)?serial\b/.test(t)) return "int";
+  if (/^(numeric|decimal|real|double|float|money)/.test(t)) return "dec";
+  if (/^(timestamp|datetime)/.test(t)) return "time";
+  if (/^date$/.test(t)) return "date";
+  if (/^json/.test(t)) return "json";
+  if (/char/.test(t)) return "text";
+  if (/^(tiny|medium|long)?text$|^clob$/.test(t)) return d === "sqlite" ? "text" : "long";
+  return null;
+}
+export type DraftCol = { name: string; kind: ColKind; pk: boolean; nn: boolean; auto: boolean; def: string; uniq: boolean; ref?: Ref };
+const REF = String.raw`references\s+("(?:[^"]|"")*"|\x60(?:[^\x60]|\x60\x60)*\x60|[\p{L}\p{N}_.]+)\s*(?:\(([^),]*)\))?`;
+/** SQL default literal → the plain value the designer shows (inverse of defSql). */
+function defPlain(k: ColKind, v: string) {
+  v = v.trim();
+  if (/^null$/i.test(v)) return "";
+  if (/^\(?\s*(current_timestamp|current_date|now\(\))\s*\)?$/i.test(v)) return "now";
+  v = v.replace(/^\(([\s\S]*)\)$/, "$1").trim(); // MySQL expression default ('x')
+  if (k === "bool") return /^(true|1|'1'|'t')$/i.test(v) ? "yes" : "no";
+  const m = /^'([\s\S]*)'(::[\w ]+)?$/.exec(v);
+  return m ? m[1].replace(/''/g, "'") : v;
+}
+const STOP = String.raw`not|null|default|primary|generated|auto_increment|autoincrement|unique|references|check|constraint|collate|unsigned`;
+/** Edited CREATE TABLE → table name + designer columns. Throws a readable Error for anything the designer can't show. */
+export function parseCreate(d: Dialect, sql: string): { table: string; cols: DraftCol[] } {
+  sql = sql.replace(/('(?:[^']|'')*'|"(?:[^"]|"")*"|`(?:[^`]|``)*`)|--[^\n]*|\/\*[\s\S]*?\*\//g, (_, q) => q ?? " "); // drop comments, keep quoted text
+  const m = /^\s*create\s+table\s+(?:if\s+not\s+exists\s+)?("(?:[^"]|"")*"|`(?:[^`]|``)*`|[\p{L}\p{N}_.]+)\s*\(([\s\S]*)\)\s*;?\s*$/iu.exec(sql);
+  if (!m) throw new Error("Expected: CREATE TABLE name ( column type, … )");
+  const table = unq(d, /^["`]/.test(m[1]) ? m[1] : m[1].split(".").pop()!);
+  const cols: DraftCol[] = [], tablePk: string[] = [], tableUq: string[] = [], tableFk: [string, Ref][] = [];
+  const ref = (t: string, c?: string): Ref => ({ t: unq(d, /^["`]/.test(t) ? t : t.split(".").pop()!), c: c ? unq(d, c.trim()) : "id" });
+  for (const part of splitTop(m[2]).filter(Boolean)) {
+    const fk = new RegExp(String.raw`^(?:constraint\s+\S+\s+)?foreign\s+key\s*\(([^),]*)\)\s*${REF}`, "iu").exec(part); // single-column FK only
+    if (fk) { tableFk.push([unq(d, fk[1].trim()), ref(fk[2], fk[3])]); continue; }
+    const pk = /^(?:constraint\s+\S+\s+)?primary\s+key\s*\(([^)]*)\)$/i.exec(part);
+    if (pk) { tablePk.push(...pk[1].split(",").map((s) => unq(d, s.trim()))); continue; }
+    const uq = /^(?:constraint\s+\S+\s+)?unique\s*(?:key\s*)?\(([^),]*)\)$/i.exec(part); // single-column UNIQUE only
+    if (uq) { tableUq.push(unq(d, uq[1].trim())); continue; }
+    if (/^(constraint|foreign|unique|check|key|index)\b/i.test(part)) throw new Error(`Not supported in the designer: ${part.split(/\s+/).slice(0, 3).join(" ")}… — use Open in Query`);
+    const c = new RegExp(String.raw`^("(?:[^"]|"")*"|\x60(?:[^\x60]|\x60\x60)*\x60|[\p{L}\p{N}_]+)\s+([\p{L}\p{N}_ ]+?(?:\s*\([^)]*\))?)(?=\s+(?:${STOP})\b|\s*$)([\s\S]*)$`, "iu").exec(part);
+    if (!c) throw new Error(`Can't read column: ${part}`);
+    const [, rawName, type, rest] = c, name = unq(d, rawName);
+    const bare = rest.replace(/'(?:[^']|'')*'/g, "''"); // keywords inside a quoted default don't count
+    const kind = kindOfType(d, type);
+    if (!kind) throw new Error(`${name}: type "${type.trim()}" has no kind here (Text, Number, Decimal, Yes/No, Date, Date & time, JSON)`);
+    if (/\bcheck\b/i.test(bare)) throw new Error(`${name}: CHECK isn't supported in the designer — use Open in Query`);
+    const def = /(?<!\bby\s+)\bdefault\s+('(?:[^']|'')*'(?:::[\w ]+)?|\([^)]*\)|[^\s,]+)/i.exec(rest)?.[1] ?? "";
+    const r = new RegExp(REF, "iu").exec(bare);
+    cols.push({ name, kind, pk: /\bprimary\s+key\b/i.test(bare), nn: /\bnot\s+null\b/i.test(bare),
+      auto: /\b(auto_increment|autoincrement|identity)\b/i.test(bare) || /serial/i.test(type), def: def ? defPlain(kind, def) : "", uniq: /\bunique\b/i.test(bare),
+      ...(r ? { ref: ref(r[1], r[2]) } : {}) });
+  }
+  if (!cols.length) throw new Error("No columns");
+  for (const [n, r] of tableFk) { const c = cols.find((x) => x.name === n); if (!c) throw new Error(`FOREIGN KEY names unknown column ${n}`); c.ref = r; }
+  for (const n of tablePk) { const c = cols.find((x) => x.name === n); if (!c) throw new Error(`PRIMARY KEY names unknown column ${n}`); c.pk = true; }
+  for (const n of tableUq) { const c = cols.find((x) => x.name === n); if (!c) throw new Error(`UNIQUE names unknown column ${n}`); c.uniq = true; }
+  const pks = cols.filter((c) => c.pk);
+  if (d === "sqlite" && pks.length === 1 && pks[0].kind === "int") pks[0].auto = true; // INTEGER PRIMARY KEY = auto rowid
+  return { table, cols };
+}
+/** Order tables so every table comes after the tables it references (deps outside the list are ignored). Throws on a cycle. */
+export function createOrder(tables: { name: string; deps: string[] }[]): string[] {
+  const left = new Map(tables.map((t) => [t.name, new Set(t.deps.filter((d) => d !== t.name && tables.some((x) => x.name === d)))]));
+  const out: string[] = [];
+  while (left.size) {
+    const ready = [...left].filter(([, deps]) => !deps.size).map(([n]) => n);
+    if (!ready.length) throw new Error(`Tables refer to each other in a loop: ${[...left.keys()].join(", ")}`);
+    for (const n of ready) (out.push(n), left.delete(n));
+    for (const deps of left.values()) for (const n of ready) deps.delete(n);
+  }
+  return out;
+}
 export function createSql(d: Dialect, t: string, cols: NewCol[]) {
   const pks = cols.filter((c) => c.pk);
   const line = (c: NewCol) =>
     `${qid(d, c.name)} ${d === "sqlite" && c.auto ? "INTEGER" : c.type}` // SQLite: INTEGER PRIMARY KEY is the auto rowid
     + (c.auto && d === "postgres" ? " GENERATED BY DEFAULT AS IDENTITY" : "")
     + (c.nn ? " NOT NULL" : "")
+    + (c.uniq ? " UNIQUE" : "")
     + (c.def.trim() ? ` DEFAULT ${c.def.trim()}` : "")
     + (c.pk && pks.length === 1 ? " PRIMARY KEY" : "")
     + (c.auto && d === "mysql" ? " AUTO_INCREMENT" : "");
   const lines = cols.map(line);
   if (pks.length > 1) lines.push(`PRIMARY KEY (${pks.map((c) => qid(d, c.name)).join(", ")})`);
+  // table-level, because MySQL silently ignores a column-level REFERENCES
+  for (const c of cols) if (c.ref) lines.push(`FOREIGN KEY (${qid(d, c.name)}) REFERENCES ${qid(d, c.ref.t)} (${qid(d, c.ref.c)})`);
   return `CREATE TABLE ${qid(d, t)} (\n  ${lines.join(",\n  ")}\n)`;
 }
 
