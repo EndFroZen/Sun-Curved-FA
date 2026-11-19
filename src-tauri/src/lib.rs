@@ -613,6 +613,76 @@ fn np_remove(folder: String, name: Option<String>) -> Result<(), String> {
     if name.is_some() { std::fs::remove_file(p) } else { std::fs::remove_dir(p) }.map_err(|e| e.to_string())
 }
 
+// ----- Sun Post collections: each saved request is <name>.json under %APPDATA%\Sun Curved\post\<folders...> -----
+// Paths from the UI are "a/b/name" (no extension); every part goes through np_part, so nothing escapes the post folder.
+
+fn pt_root() -> Result<PathBuf, String> {
+    let base = std::env::var_os("APPDATA").map(PathBuf::from).ok_or("APPDATA not set")?;
+    let d = base.join("Sun Curved").join("post");
+    std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+    Ok(d)
+}
+
+fn pt_path(rel: &str, file: bool) -> Result<PathBuf, String> {
+    let mut p = pt_root()?;
+    for part in rel.split('/') { p.push(np_part(part)?) } // np_part refuses "" → never the root itself
+    if file { p = format!("{}.json", p.display()).into() }
+    Ok(p)
+}
+
+#[derive(Serialize)]
+struct PtItem { p: String, dir: bool, text: String }
+
+fn pt_scan(dir: &Path, pre: &str, out: &mut Vec<PtItem>) -> std::io::Result<()> {
+    for e in std::fs::read_dir(dir)? {
+        let p = e?.path();
+        let Some(name) = p.file_name().and_then(|s| s.to_str()) else { continue };
+        if p.is_dir() {
+            let rel = format!("{pre}{name}");
+            pt_scan(&p, &format!("{rel}/"), out)?;
+            out.push(PtItem { p: rel, dir: true, text: String::new() });
+        } else if let Some(stem) = name.strip_suffix(".json") {
+            out.push(PtItem { p: format!("{pre}{stem}"), dir: false, text: String::from_utf8_lossy(&std::fs::read(&p)?).into_owned() });
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn pt_list() -> Result<Vec<PtItem>, String> {
+    let mut out = vec![];
+    pt_scan(&pt_root()?, "", &mut out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// write a request file; missing parent folders are created ("save as a/b/x")
+#[tauri::command]
+fn pt_write(path: String, text: String) -> Result<(), String> {
+    let p = pt_path(&path, true)?;
+    if let Some(d) = p.parent() { std::fs::create_dir_all(d).map_err(|e| e.to_string())? }
+    std::fs::write(p, text).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn pt_mkdir(path: String) -> Result<(), String> {
+    std::fs::create_dir_all(pt_path(&path, false)?).map_err(|e| e.to_string())
+}
+
+/// rename/move a request or folder; never overwrites
+#[tauri::command]
+fn pt_move(from: String, to: String, dir: bool) -> Result<(), String> {
+    let (a, b) = (pt_path(&from, !dir)?, pt_path(&to, !dir)?);
+    if b.exists() { return Err(format!("already exists: {to}")) }
+    if let Some(d) = b.parent() { std::fs::create_dir_all(d).map_err(|e| e.to_string())? }
+    std::fs::rename(a, b).map_err(|e| e.to_string())
+}
+
+/// delete a request, or a folder with everything in it (the UI confirms first)
+#[tauri::command]
+fn pt_remove(path: String, dir: bool) -> Result<(), String> {
+    if dir { std::fs::remove_dir_all(pt_path(&path, false)?) } else { std::fs::remove_file(pt_path(&path, true)?) }.map_err(|e| e.to_string())
+}
+
 // Images in notes live in notepad\.assets\<ms>.<ext>; notes link them as ![](.assets/<name>).
 // ponytail: images are never deleted (a note may still link one); add a "clean unused images" action if the folder grows
 fn np_assets() -> Result<PathBuf, String> {
@@ -710,6 +780,11 @@ pub fn run() {
             np_remove,
             np_save_image,
             np_image,
+            pt_list,
+            pt_write,
+            pt_mkdir,
+            pt_move,
+            pt_remove,
             #[cfg(windows)]
             np_pdf
         ])

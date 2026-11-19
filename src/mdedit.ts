@@ -1,7 +1,7 @@
 // One-pane Markdown editor with live preview (Obsidian-style): markup is hidden on every line except
 // the one(s) being edited, headings/bold/code are styled in place, task boxes are clickable.
 import { Decoration, EditorView, WidgetType, keymap, placeholder, type DecorationSet } from "@codemirror/view";
-import { EditorState, StateEffect, StateField, type Range } from "@codemirror/state";
+import { Compartment, EditorState, StateEffect, StateField, type Range } from "@codemirror/state";
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
@@ -9,6 +9,7 @@ import { tags as t } from "@lezer/highlight";
 import { safeMd } from "./notes";
 import { lucide } from "./iconpick";
 import { blocks } from "./blocks";
+import { CODE_LANGS, langOf } from "./codefmt";
 
 const style = HighlightStyle.define([
   { tag: t.heading1, fontSize: "1.6em", fontWeight: "700" },
@@ -177,9 +178,44 @@ class Block extends WidgetType {
     const d = Object.assign(document.createElement("div"), { className: "manual cal-md md-block", innerHTML: `<div>${safeMd(this.src)}</div>` });
     requestAnimationFrame(() => snapToLines(view, d, d.firstElementChild as HTMLElement));
     d.onmousedown = (e) => (e.preventDefault(), view.focus(), view.dispatch({ selection: { anchor: this.at } }));
+    const f = /^(`{3,}|~{3,})[ \t]*([^\s`]*)[^\n]*\n?/.exec(this.src);
+    if (f) d.append(this.codeBar(view, f[1], f[2], this.src.slice(f[0].length).replace(/\n?[ \t]*(`{3,}|~{3,})[ \t]*$/, "")));
     return d;
   }
-  ignoreEvent() { return false; }
+  /** top-right of a ``` block: language (rewrites the tag after ```), Format, Copy */
+  codeBar(view: EditorView, fence: string, tag: string, body: string) {
+    const bar = Object.assign(document.createElement("div"), { className: "md-codebar" });
+    bar.onmousedown = (e) => e.stopPropagation(); // the block's own mousedown would jump into the source
+    const put = (t: string, b: string) => {
+      if (view.state.sliceDoc(this.at, this.at + this.src.length) !== this.src) return; // note changed meanwhile
+      view.dispatch({ changes: { from: this.at, to: this.at + this.src.length, insert: `${fence}${t}\n${b.replace(/\n+$/, "")}\n${fence}` } });
+    };
+    const lang = langOf(tag);
+    const sel = document.createElement("select");
+    sel.title = "Language";
+    sel.innerHTML = (lang ? "" : `<option value="${tag.replace(/"/g, "")}">${tag.replace(/</g, "&lt;")}</option>`) +
+      CODE_LANGS.map(([v, l]) => `<option value="${v}">${l}</option>`).join("");
+    sel.value = lang ? lang[0] : tag;
+    sel.onchange = () => put(sel.value, body);
+    const btn = (label: string, ic: string, run: (b: HTMLButtonElement) => Promise<void>) => {
+      const b = Object.assign(document.createElement("button"), { innerHTML: `${lucide(ic, "h-3.5 w-3.5")}<span>${label}</span>` });
+      b.onclick = async () => {
+        const s = b.querySelector("span")!;
+        try { await run(b); } catch (e) { s.textContent = "Error"; b.title = String(e); setTimeout(() => ((s.textContent = label), (b.title = "")), 2500); }
+      };
+      return b;
+    };
+    const fmt = btn("Format", "wand-sparkles", async () => put(lang ? lang[0] : tag, await lang![2]!(body)));
+    if (!lang?.[2]) Object.assign(fmt, { disabled: true, title: "No formatter for this language" });
+    const copy = btn("Copy", "copy", async (b) => {
+      await navigator.clipboard.writeText(body);
+      b.querySelector("span")!.textContent = "Copied";
+      setTimeout(() => (b.querySelector("span")!.textContent = "Copy"), 1200);
+    });
+    bar.append(sel, fmt, copy);
+    return bar;
+  }
+  ignoreEvent(e: Event) { return !!(e.target as Element).closest?.(".md-codebar"); } // its own clicks, not "edit the source"
 }
 const hide = Decoration.replace({});
 const HIDDEN = new Set(["HeaderMark", "EmphasisMark", "StrikethroughMark", "LinkMark", "URL", "QuoteMark"]);
@@ -246,6 +282,7 @@ const live = StateField.define<{ focus: boolean; img: boolean; deco: DecorationS
 });
 
 export function createMdEditor(parent: HTMLElement, opts: { placeholder?: string; onSubmit: () => void; onChange?: () => void; blocks?: Parameters<typeof blocks>[0] }) {
+  const lock = new Compartment();
   const view = new EditorView({
     parent,
     state: EditorState.create({
@@ -261,6 +298,7 @@ export function createMdEditor(parent: HTMLElement, opts: { placeholder?: string
         placeholder(opts.placeholder ?? ""),
         EditorView.updateListener.of((u) => u.docChanged && opts.onChange?.()),
         opts.blocks ? blocks(opts.blocks) : [],
+        lock.of([]),
       ],
     }),
   });
@@ -270,5 +308,7 @@ export function createMdEditor(parent: HTMLElement, opts: { placeholder?: string
     focus: () => view.focus(),
     /** true: images show as their Markdown; false: as pictures */
     imageSource: (on: boolean) => view.dispatch({ effects: setImgSource.of(on) }),
+    /** false: view only (no cursor, so every line shows rendered) */
+    editable: (on: boolean) => view.dispatch({ effects: lock.reconfigure(on ? [] : [EditorView.editable.of(false), EditorState.readOnly.of(true)]) }),
   };
 }

@@ -1052,13 +1052,21 @@ async function app() {
         ${backBtn('id="post-close"', "Main display")}
         ${appTitle("post", "Sun Post", "HTTP requests")}
       </div>
-      <div class="mt-6 grid min-h-0 flex-1 grid-cols-[14rem_1fr] gap-6">
-        <aside class="flex min-h-0 flex-col rounded-2xl border border-zinc-800 bg-zinc-900 p-3">
-          <div class="flex items-center justify-between px-2 pb-2 text-[11px] font-medium uppercase tracking-wider text-zinc-500">History
+      <div class="mt-6 grid min-h-0 flex-1 grid-cols-[17rem_1fr] gap-6">
+        <aside class="flex min-h-0 flex-col rounded-2xl border border-zinc-800 bg-zinc-900 p-3 font-mono">
+          <div class="flex items-center gap-1 px-2 pb-2 text-[11px] font-medium uppercase tracking-wider text-zinc-500"><span class="mr-auto">Collections</span>
+            <button id="pt-newdir" title="New folder" class="rounded-md p-1 text-zinc-400 hover:bg-zinc-800 hover:text-amber-400">${icon("folder", "h-3.5 w-3.5")}</button>
+            <button id="pt-new" title="New request (Ctrl+N)" class="rounded-md p-1 text-zinc-400 hover:bg-zinc-800 hover:text-amber-400">${icon("plus", "h-3.5 w-3.5")}</button></div>
+          <ul id="pt-tree" class="min-h-0 flex-1 overflow-auto text-xs leading-6"></ul>
+          <div class="mt-2 flex items-center justify-between border-t border-zinc-800 px-2 pb-2 pt-3 text-[11px] font-medium uppercase tracking-wider text-zinc-500">History
             <button id="post-clear" class="rounded-md px-2 py-0.5 normal-case tracking-normal text-zinc-400 hover:bg-zinc-800">Clear</button></div>
-          <ul id="post-hist" class="min-h-0 flex-1 space-y-0.5 overflow-auto"></ul>
+          <ul id="post-hist" class="max-h-[35%] min-h-0 space-y-0.5 overflow-auto"></ul>
         </aside>
         <form id="post-form" class="flex min-h-0 flex-col gap-3">
+          <div class="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 font-mono text-xs">
+            <span class="text-emerald-400">~/post/</span><span id="pt-crumb" class="min-w-0 flex-1 truncate"></span>
+            <button type="button" id="pt-save" class="rounded-md border border-zinc-700 px-2 py-0.5 text-zinc-400 hover:border-amber-500 hover:text-amber-400">Ctrl+S save</button>
+          </div>
           <div class="flex gap-2">
             <select name="m" class="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm font-semibold text-amber-400 outline-none focus:border-amber-500">${["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((m) => `<option>${m}</option>`).join("")}</select>
             <input name="u" required placeholder="https://api.example.com/users" class="min-w-0 flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm outline-none placeholder:text-zinc-600 focus:border-amber-500" />
@@ -1086,7 +1094,7 @@ async function app() {
         ${appTitle("notepad", "Notepad", "Plain text, saved automatically")}
         <!-- the open note's name, big, next to the app title; details underneath -->
         <div id="np-info" class="ml-10 min-w-0">
-          <p id="np-title" class="truncate text-2xl font-semibold leading-tight"></p>
+          <input id="np-title" spellcheck="false" autocomplete="off" title="Click to rename" class="w-[28rem] max-w-full truncate rounded-md border border-transparent bg-transparent px-1 -mx-1 text-2xl font-semibold leading-tight outline-none read-only:cursor-default [&:not(:read-only)]:hover:border-zinc-700 focus:border-amber-500" />
           <p id="np-meta" class="truncate font-mono text-xs text-zinc-500"></p>
         </div>
         <span class="flex-1"></span>
@@ -1129,6 +1137,7 @@ async function app() {
                 ${NP_FONTS.map(([id, l, f]) => `<button data-font="${id}" style='font-family: ${f}' class="np-fontopt flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left hover:bg-zinc-800">${l}<span class="np-fontchk text-amber-400">${icon("check")}</span></button>`).join("")}
               </div>
             </div>
+            <button id="np-edit" class="flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-700 px-3 py-2 font-medium hover:bg-zinc-800"></button>
             <button id="np-pdf" class="flex w-full items-center justify-center gap-2 rounded-lg bg-amber-500 px-3 py-2 font-medium text-black hover:bg-amber-400">${lucide("file-down", "h-4 w-4")} Export PDF</button>
           </div>
         </span>
@@ -1149,6 +1158,8 @@ async function app() {
             <div class="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-amber-500/15 text-amber-400">${icon("file", "h-[18px] w-[18px]")}</div>
             <h2 class="font-semibold">New note</h2>
           </div>
+          <p class="text-[11px] font-medium uppercase tracking-wider text-zinc-500">File name</p>
+          <input name="npname" spellcheck="false" autocomplete="off" class="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20" />
           <p class="text-[11px] font-medium uppercase tracking-wider text-zinc-500">Paper</p>
           <div class="grid grid-cols-4 gap-2">${NP_PAPERS.map(([v, l]) => `
             <label class="flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-zinc-800 p-2 text-xs has-[:checked]:border-amber-500 has-[:checked]:bg-amber-500/10">
@@ -1375,13 +1386,132 @@ async function app() {
       <span class="w-12 shrink-0 font-semibold text-amber-400">${esc(r.m)}</span><span class="truncate text-zinc-300">${esc(r.u.replace(/^https?:\/\//, ""))}</span></li>`).join("")
       || `<li class="py-6 text-center text-sm text-zinc-600">No requests yet</li>`;
   };
-  $("[data-post]").onclick = () => (drawHist(), postPage.classList.replace("hidden", "flex"), postField("u").focus());
+  // Collections: requests saved as %APPDATA%\Sun Curved\post\<folders>\<name>.json (Rust pt_* commands), shown as an ASCII tree.
+  type PtItem = { p: string; dir: boolean; text: string; r?: PostReq };
+  let ptItems: PtItem[] = [], ptCur = "", ptDir = "", ptSaved = ""; // open file, folder new things go into, file text as last saved
+  const ptShut = new Set<string>(); // collapsed folders
+  const ptParent = (p: string) => p.slice(0, Math.max(0, p.lastIndexOf("/")));
+  const ptLeaf = (p: string) => p.slice(p.lastIndexOf("/") + 1);
+  const ptJoin = (d: string, n: string) => (d ? `${d}/${n}` : n);
+  const ptCall = <T,>(cmd: string, a: Record<string, unknown> = {}) => invoke<T>(cmd, a).catch((e) => {
+    $("#post-meta").innerHTML = `<span class="text-red-400">${esc(String(e))}</span>`;
+    throw e;
+  });
+  const ptText = () => JSON.stringify({ method: postField("m").value, url: postField("u").value, headers: postField("h").value, body: postField("b").value }, null, 2);
+  const ptDirty = () => (ptCur ? ptText() !== ptSaved : !!postField("u").value.trim());
+  const ptFill = (r: PostReq) => (["m", "u", "h", "b"] as const).forEach((k) => (postField(k).value = r[k]));
+  const drawPt = () => {
+    const tree = (dir: string, pre: string): string => {
+      const kids = ptItems.filter((x) => ptParent(x.p) === dir).sort((a, b) => +b.dir - +a.dir || a.p.localeCompare(b.p));
+      return kids.map((x, i) => {
+        const last = i === kids.length - 1, on = x.p === ptCur, shut = ptShut.has(x.p);
+        const head = `<span class="text-zinc-600">${pre}${last ? "└─ " : "├─ "}</span>`;
+        const body = x.dir
+          ? `<span class="${x.p === ptDir ? "text-sky-300" : "text-sky-500"}">${esc(ptLeaf(x.p))}/</span>${shut ? `<span class="ml-1 text-zinc-600">…</span>` : ""}`
+          : `<span class="mr-1.5 w-9 shrink-0 text-[10px] font-semibold ${on ? "text-amber-400" : "text-amber-500/70"}">${esc(x.r?.m ?? "?")}</span><span class="truncate ${on ? "text-amber-300" : "text-zinc-300"}">${on ? "▶ " : ""}${esc(ptLeaf(x.p))}</span>${on && ptDirty() ? `<span class="ml-auto pl-1 text-amber-400">●</span>` : ""}`;
+        return `<li data-pt="${esc(x.p)}" class="flex cursor-pointer items-center whitespace-pre rounded px-1 hover:bg-zinc-800 ${on ? "bg-amber-500/10" : ""}">${head}${body}</li>`
+          + (x.dir && !shut ? tree(x.p, pre + (last ? "   " : "│  ")) : "");
+      }).join("");
+    };
+    $("#pt-tree").innerHTML = tree("", "") || `<li class="px-2 py-6 text-center text-zinc-600">empty — Ctrl+S saves the current request</li>`;
+    const parts = (ptCur || ptJoin(ptDir, "untitled")).split("/");
+    $("#pt-crumb").innerHTML = parts.map((s, i) => i < parts.length - 1 ? `<span class="text-sky-400">${esc(s)}/</span>` : `<span class="${ptCur ? "text-amber-400" : "italic text-zinc-500"}">${esc(s)}${ptCur ? ".json" : ""}</span>`).join("")
+      + (ptDirty() ? `<span class="ml-2 text-amber-400" title="Unsaved changes">●</span>` : "");
+  };
+  const ptLoad = async () => {
+    ptItems = (await ptCall<PtItem[]>("pt_list")).map((x) => {
+      if (x.dir) return x;
+      try { const j = JSON.parse(x.text); return { ...x, r: { m: String(j.method ?? "GET"), u: String(j.url ?? ""), h: String(j.headers ?? ""), b: String(j.body ?? "") } }; } catch { return x; }
+    });
+    if (ptDir && !ptItems.some((x) => x.dir && x.p === ptDir)) ptDir = "";
+    drawPt();
+  };
+  const ptOpen = (x: PtItem) => {
+    if (!x.r) return void ($("#post-meta").innerHTML = `<span class="text-red-400">${esc(x.p)}.json is not a valid request file</span>`);
+    ptFill(x.r);
+    [ptCur, ptDir, ptSaved] = [x.p, ptParent(x.p), ptText()];
+    drawPt(), showWhere();
+  };
+  const ptNew = (dir = ptDir) => {
+    ptFill({ m: "GET", u: "", h: "", b: "" });
+    [ptCur, ptDir] = ["", dir];
+    drawPt(), showWhere(), postField("u").focus();
+  };
+  const ptSave = async (as = false) => {
+    let p = ptCur;
+    if (!p || as) {
+      const n = await askName(as ? "Save request as" : "Save request", `~/post/${ptDir}`, "Save", "file", ptCur ? ptLeaf(ptCur) : "");
+      if (!n) return;
+      p = ptJoin(ptDir, n); // "a/b" in the name saves into (new) sub folders
+      if (p !== ptCur && ptItems.some((x) => !x.dir && x.p === p) && !(await confirmBox("Overwrite request?", `~/post/${p}.json`, "Overwrite"))) return;
+    }
+    const text = ptText();
+    await ptCall("pt_write", { path: p, text });
+    [ptCur, ptDir, ptSaved] = [p, ptParent(p), text];
+    await ptLoad();
+  };
+  const ptMkdir = async (dir = ptDir) => {
+    const n = await askName("New folder", `~/post/${dir}`, "Create", "folder", "");
+    if (!n) return;
+    await ptCall("pt_mkdir", { path: ptJoin(dir, n) });
+    ptDir = ptJoin(dir, n);
+    ptShut.delete(dir);
+    await ptLoad();
+  };
+  /** Rename keeps the item in its folder; a "/" in the new name moves it. Open file / target folder follow along. */
+  const ptRename = async (x: PtItem) => {
+    const n = await askName(x.dir ? "Rename folder" : "Rename request", `~/post/${x.p}`, "Rename", x.dir ? "folder" : "file", ptLeaf(x.p));
+    const to = n && ptJoin(ptParent(x.p), n);
+    if (!to || to === x.p) return;
+    await ptCall("pt_move", { from: x.p, to, dir: x.dir });
+    const follow = (p: string) => (p === x.p || (x.dir && p.startsWith(`${x.p}/`)) ? to + p.slice(x.p.length) : p);
+    [ptCur, ptDir] = [follow(ptCur), follow(ptDir)];
+    await ptLoad();
+  };
+  const ptRemove = async (x: PtItem) => {
+    const inside = ptItems.filter((y) => !y.dir && y.p.startsWith(`${x.p}/`)).length;
+    if (!(await confirmBox(x.dir ? "Delete folder?" : "Delete request?", x.dir ? `~/post/${x.p}/ and ${inside} request(s) in it` : `~/post/${x.p}.json`, "Delete"))) return;
+    await ptCall("pt_remove", { path: x.p, dir: x.dir });
+    const gone = (p: string) => p === x.p || p.startsWith(`${x.p}/`);
+    if (gone(ptCur)) ptCur = ""; // fields stay on screen as an unsaved request
+    if (gone(ptDir)) ptDir = ptParent(x.p);
+    await ptLoad();
+  };
+  const ptAt = (e: Event) => ptItems.find((x) => x.p === (e.target as HTMLElement).closest<HTMLElement>("[data-pt]")?.dataset.pt);
+  $("#pt-tree").onclick = (e) => {
+    const x = ptAt(e);
+    if (!x) return;
+    if (!x.dir) return ptOpen(x);
+    ptDir = x.p;
+    ptShut.has(x.p) ? ptShut.delete(x.p) : ptShut.add(x.p);
+    drawPt();
+  };
+  $("#pt-tree").oncontextmenu = (e) => {
+    const x = ptAt(e);
+    if (!x) return contextMenu(e, [["New request", "plus", () => ptNew("")], ["New folder", "folder", () => void ptMkdir("")]]);
+    contextMenu(e, x.dir
+      ? [["New request here", "plus", () => ptNew(x.p)], ["New folder here", "folder", () => void ptMkdir(x.p)], ["Rename", "pencil", () => void ptRename(x)], ["Delete folder", "trash", () => void ptRemove(x)]]
+      : [["Open", "play", () => ptOpen(x)], ["Rename / move", "pencil", () => void ptRename(x)], ["Delete", "trash", () => void ptRemove(x)]]);
+  };
+  $("#pt-new").onclick = () => ptNew();
+  $("#pt-newdir").onclick = () => void ptMkdir();
+  $("#pt-save").onclick = () => void ptSave();
+  postForm.addEventListener("input", drawPt); // unsaved dot
+  postForm.addEventListener("change", drawPt);
+  addEventListener("keydown", (e) => {
+    if (postPage.classList.contains("hidden") || $<HTMLDialogElement>("#confirm").open || !(e.ctrlKey || e.metaKey)) return;
+    const k = e.key.toLowerCase();
+    if (k === "s") e.preventDefault(), void ptSave(e.shiftKey); // Ctrl+Shift+S = save as
+    if (k === "n") e.preventDefault(), ptNew();
+  });
+
+  $("[data-post]").onclick = () => (drawHist(), void ptLoad(), postPage.classList.replace("hidden", "flex"), postField("u").focus());
   $("#post-close").onclick = () => postPage.classList.replace("flex", "hidden");
   $("#post-tab").onclick = () => ((postShowHeads = !postShowHeads), drawPostOut());
   $("#post-clear").onclick = () => ((postHist = []), (localStorage.postHist = "[]"), drawHist());
   $("#post-hist").onclick = (e) => {
     const r = postHist[+((e.target as HTMLElement).closest<HTMLElement>("[data-h]")?.dataset.h ?? -1)];
-    if (r) (["m", "u", "h", "b"] as const).forEach((k) => (postField(k).value = r[k])), showWhere();
+    if (r) ptFill(r), (ptCur = ""), drawPt(), showWhere(); // from history = a new, unsaved request
   };
   postForm.onsubmit = async (e) => {
     e.preventDefault();
@@ -1526,7 +1656,7 @@ async function app() {
     return npImgs.get(name)!;
   };
   setImageResolver(npImgSrc);
-  npText.onmousedown = (e) => void (e.target === npText && (e.preventDefault(), npEd.focus())); // click in the margins → keep typing
+  npText.onmousedown = (e) => void (npEditing && e.target === npText && (e.preventDefault(), npEd.focus())); // click in the margins → keep typing
   const npErr = (e: unknown) => { $("#np-meta").textContent = `⚠ ${e}`; };
   const np = <T,>(cmd: string, a: Record<string, unknown>) => invoke<T>(cmd, a).catch((e) => { npErr(e); throw e; });
   const npWrite = (n: Note) => np<number>("np_write", { folder: n.folder ?? "", name: n.name, text: n.text });
@@ -1573,7 +1703,9 @@ async function app() {
   const stamp = (t: number) => new Date(t).toLocaleString("sv").slice(0, 16).replace(":", "."); // 2026-11-12 15.30 (no ":" in file names)
   const npInfo = () => {
     showWhere();
-    $("#np-title").textContent = npOpen ? npOpen.name : npDir ?? "";
+    const ti = $<HTMLInputElement>("#np-title");
+    ti.readOnly = !npOpen;
+    if (document.activeElement !== ti) ti.value = npOpen ? npOpen.name : npDir ?? "";
     $("#np-meta").textContent = npOpen
       ? `${npOpen.folder ? `${npOpen.folder} · ` : ""}${npEd.get().split("\n").length} lines · ${npEd.get().length} chars`
       : `${npDir ? notes.filter((n) => n.folder === npDir).length : notes.length} notes`;
@@ -1644,13 +1776,17 @@ async function app() {
     (f.elements.namedItem("orient") as RadioNodeList).value = last.orient;
     f.onchange = minis;
     minis();
+    const nameIn = f.elements.namedItem("npname") as HTMLInputElement;
+    nameIn.value = stamp(Date.now());
+    nameIn.onkeydown = (e) => void (e.key === "Enter" && (e.preventDefault(), dlg.close("ok"))); // Enter = Create, not the first button (Cancel)
     dlg.returnValue = "";
     dlg.showModal();
-    return new Promise<NpMeta | null>((res) => dlg.addEventListener("close", () => {
+    nameIn.select();
+    return new Promise<(NpMeta & { name: string }) | null>((res) => dlg.addEventListener("close", () => {
       if (dlg.returnValue !== "ok") return res(null);
       const m = { paper: (f.elements.namedItem("paper") as RadioNodeList).value, orient: (f.elements.namedItem("orient") as RadioNodeList).value };
       localStorage.notepadLast = JSON.stringify(m);
-      res(m);
+      res({ ...m, name: nameIn.value.trim() || stamp(Date.now()) });
     }, { once: true }));
   };
   const npForget = (id: number) => ((npRecent = npRecent.filter((x) => x !== id)), db.execute("DELETE FROM notepad_recent WHERE id = $1", [id]));
@@ -1693,7 +1829,28 @@ async function app() {
     else if (d) contextMenu(e, [["Open", "folder", () => ((npDir = d), npShow(null))], npPinItem(d)]);
     else e.preventDefault();
   };
-  const npShow = (n: Note | null) => {
+  // rename the open note right in its title: Enter / leaving the box saves, Esc puts the old name back
+  const npTitle = $<HTMLInputElement>("#np-title");
+  npTitle.onkeydown = (e) => {
+    if (e.key === "Enter") npTitle.blur();
+    else if (e.key === "Escape") (npTitle.value = npOpen?.name ?? ""), npTitle.blur();
+  };
+  npTitle.onchange = async () => {
+    const n = npOpen, name = npTitle.value.trim();
+    if (n && name && name !== n.name) await npMove(n, n.folder, name).catch(() => {}), npDraw();
+    npInfo();
+  };
+  // a note opens rendered and read-only; Edit (tools dropdown) unlocks it
+  let npEditing = false;
+  const npSetEdit = (on: boolean) => {
+    npEditing = on;
+    npEd.editable(on);
+    $("#np-edit").innerHTML = on ? `${icon("check")} Done editing` : `${icon("pencil")} Edit`;
+    $("#np-tools-btn").classList.toggle("text-amber-400", on);
+    if (on) npEd.focus();
+  };
+  $("#np-edit").onclick = () => (npTools(false), npSetEdit(!npEditing));
+  const npShow = (n: Note | null, edit = false) => {
     npOpen = n;
     npList.classList.toggle("hidden", !!n);
     $("#np-desk").classList.toggle("hidden", !n);
@@ -1704,7 +1861,7 @@ async function app() {
     $("#np-newdir").classList.toggle("hidden", !!n || !!npDir);
     if (n) npTouch(n.id).catch(console.error);
     npSideDraw();
-    if (n) (npLoading = true), npEd.set(n.text), (npLoading = false), npEd.focus();
+    if (n) (npLoading = true), npEd.set(n.text), (npLoading = false), npSetEdit(edit);
     else npDraw();
     npInfo();
   };
@@ -1757,14 +1914,14 @@ async function app() {
     npSideDraw(); // names/moves/deletes show in the sidebar too
   };
   const npNew = async () => {
-    const meta = await npAskMeta();
-    if (!meta) return;
-    const folder = npDir ?? undefined;
-    const n: Note = { id: 0, name: npUnique(stamp(Date.now()), folder), text: "", t: Date.now(), folder };
+    const ask = await npAskMeta();
+    if (!ask) return;
+    const { name, ...meta } = ask, folder = npDir ?? undefined;
+    const n: Note = { id: 0, name: npUnique(name, folder), text: "", t: Date.now(), folder };
     n.id = await npWrite(n);
     await npSetMeta(n.id, { ...meta, font: localStorage.notepadFont ?? NP_FONTS[0][0] });
     notes.push(n);
-    npShow(n);
+    npShow(n, true); // a new note opens ready to type
   };
   const npOpenDir = (d: string | null) => ((npDir = d), npShow(null));
   const npNewDir = async () => {
@@ -1798,8 +1955,23 @@ async function app() {
     n.folder = folder;
     n.name = to;
   };
+  // one "Move to…" item (a folder list per note would run off screen with many folders): type a folder, the datalist suggests
+  const npMoveTo = async (n: Note) => {
+    const i = $<HTMLInputElement>("#confirm-input"), dl = Object.assign(document.createElement("datalist"), { id: "np-dirlist" });
+    dl.append(...npDirs.filter((d) => d !== n.folder).map((d) => Object.assign(document.createElement("option"), { value: d })));
+    document.body.append(dl);
+    const ask = inputBox("Move to folder", n.name, "Move", "folder", "Folder name");
+    i.setAttribute("list", dl.id);
+    const raw = await ask;
+    i.removeAttribute("list");
+    dl.remove();
+    const d = raw && npDirs.find((x) => x.toLowerCase() === raw.trim().toLowerCase());
+    if (!raw) return;
+    if (!d) return npErr(`No folder named "${raw}"`);
+    if (d !== n.folder) await npMove(n, d), npDraw(), npInfo();
+  };
   const npMoveItems = (n: Note): MenuItem[] => [
-    ...npDirs.filter((d) => d !== n.folder).map((d): MenuItem => [`Move to ${d}`, "folder", async () => (await npMove(n, d), npDraw(), npInfo())]),
+    ...(npDirs.some((d) => d !== n.folder) ? [["Move to…", "folder", () => npMoveTo(n)] as MenuItem] : []),
     ...(n.folder ? [[`Move out of ${n.folder}`, "folder", async () => (await npMove(n, undefined), npDraw(), npInfo())] as MenuItem] : []),
   ];
   const npRename = async (n: Note) => {
@@ -2461,7 +2633,7 @@ async function app() {
     const f = (n: string) => r.querySelector<HTMLInputElement>(`[data-f="${n}"]`)!;
     return { name: f("name").value, kind: f("kind").value as ColKind, pk: f("pk").checked, nn: f("nn").checked, uniq: f("uq").checked, auto: f("auto").checked, def: f("def").value, ...refOf(r) };
   };
-  const ntRead = (box = ntBox): NewCol[] => (box ? [...box.querySelectorAll<HTMLElement>("[data-row]")] : []).flatMap((r) => (r.dataset.orm !== undefined ? ORM.map(ntCol) : [ntCol(rawCol(r))]));
+  const ntRead = (box = ntBox): NewCol[] => (box ? [...box.querySelectorAll<HTMLElement>("[data-row]")] : []).map((r) => ntCol(rawCol(r)));
   const ntNameIn = () => ntBox?.querySelector<HTMLInputElement>("[data-f=table]");
   const ntName = () => slug(ntNameIn()?.value ?? "");
   /** Draft SQL for the pencil editor (unnamed table → new_table, no validation). */
@@ -2485,10 +2657,10 @@ async function app() {
 
   // ----- foreign-key links: drawn from the referenced column (parent) to the FK column (child) -----
   const tnameOf = (b: HTMLElement) => slug(b.querySelector<HTMLInputElement>("[data-f=table]")!.value);
-  const cnameOf = (r: HTMLElement) => (r.dataset.orm !== undefined ? "id" : slug(r.querySelector<HTMLInputElement>("[data-f=name]")!.value));
+  const cnameOf = (r: HTMLElement) => slug(r.querySelector<HTMLInputElement>("[data-f=name]")!.value);
   const ntRowOf = (t: string, c: string) => {
     const box = [...ntCv.querySelectorAll<HTMLElement>("[data-box]")].find((b) => tnameOf(b) === t);
-    const row = box && [...box.querySelectorAll<HTMLElement>("[data-row]")].find((r) => (r.dataset.orm !== undefined ? ORM.some((o) => o.name === c) : cnameOf(r) === c));
+    const row = box && [...box.querySelectorAll<HTMLElement>("[data-row]")].find((r) => cnameOf(r) === c);
     return box && row ? { box, row } : null;
   };
   const midY = (b: HTMLElement, r: HTMLElement) => b.offsetTop + r.offsetTop + r.offsetHeight / 2;
@@ -2502,7 +2674,8 @@ async function app() {
   };
   let ntRefRows: HTMLElement[] = [];
   function ntLines(extra = "") {
-    const svg = ntCv.querySelector("svg") ?? (ntCv.insertAdjacentHTML("afterbegin", `<svg class="pointer-events-none absolute left-0 top-0 overflow-visible text-sky-400/70"></svg>`), ntCv.querySelector("svg")!);
+    // data-lines: a bare "svg" selector would grab a box's icon when the layer doesn't exist yet
+    const svg = ntCv.querySelector<SVGSVGElement>("svg[data-lines]") ?? (ntCv.insertAdjacentHTML("afterbegin", `<svg data-lines class="pointer-events-none absolute left-0 top-0 overflow-visible text-sky-400/70"></svg>`), ntCv.querySelector<SVGSVGElement>("svg[data-lines]")!);
     (svg.style.width = `${ntCv.scrollWidth}px`), (svg.style.height = `${ntCv.scrollHeight}px`);
     ntRefRows = [...ntCv.querySelectorAll<HTMLElement>("[data-row][data-ref]")];
     svg.innerHTML = ntRefRows.map((r, i) => {
@@ -2517,8 +2690,8 @@ async function app() {
   /** Drop of a link drag: on a column → that column becomes the FK; on the table → a new `<table>_<column>` FK column. */
   const ntLink = (t: string, c: string, kind: ColKind, box: HTMLElement, row: HTMLElement | null) => {
     ntSelect(box);
-    const name = `${t}_${c}`, same = [...box.querySelectorAll<HTMLElement>("[data-row]")].find((r) => r.dataset.orm === undefined && cnameOf(r) === name);
-    const target = row && row.dataset.orm === undefined ? row : same;
+    const name = `${t}_${c}`, same = [...box.querySelectorAll<HTMLElement>("[data-row]")].find((r) => cnameOf(r) === name);
+    const target = row ?? same;
     if (target) target.dataset.ref = `${t}|${c}`;
     else ntRow({ name, kind, ref: { t, c } });
     ntPreview();
@@ -2539,7 +2712,7 @@ async function app() {
   const pjTables = (p: Project): NtTable[] => { try { return JSON.parse(p.data); } catch { return []; } };
   const ntDump = (): NtTable[] => [...ntCv.querySelectorAll<HTMLElement>("[data-box]")].map((b) => ({
     name: b.querySelector<HTMLInputElement>("[data-f=table]")!.value, x: b.offsetLeft, y: b.offsetTop, created: b.dataset.created === "1" || undefined,
-    cols: [...b.querySelectorAll<HTMLElement>("[data-row]")].map((r) => (r.dataset.orm !== undefined ? { orm: true as const } : rawCol(r))),
+    cols: [...b.querySelectorAll<HTMLElement>("[data-row]")].map(rawCol),
   }));
   let ntSaveT = 0;
   const ntSaveNow = () => {
@@ -2588,21 +2761,17 @@ async function app() {
     ntSave();
     if (!c.name) ntCols.querySelector<HTMLInputElement>("[data-row]:last-child [data-f=name]")?.focus();
   };
-  /** One "orm" row on top = id, created_at, updated_at, deleted_at (ntRead expands it); replaces single rows of those names. */
+  /** ORM = id, created_at, updated_at, deleted_at as ordinary rows on top; replaces rows of those names. ({orm:true} in old project files lands here too.) */
   function ntOrm(save = true) {
-    if (ntCols.querySelector("[data-orm]")) return;
-    for (const r of ntCols.querySelectorAll<HTMLElement>("[data-row]"))
-      if (ORM.some((c) => c.name === slug(r.querySelector<HTMLInputElement>("[data-f=name]")!.value))) r.remove();
-    ntCols.insertAdjacentHTML("afterbegin", `<div data-row data-orm title="id (auto number, key) · created_at (now) · updated_at (null) · deleted_at (null)" class="flex h-7 items-center gap-1.5 border-t border-zinc-800 bg-sky-500/5 px-2">
-      <span class="grid w-6 place-items-center text-amber-400">${icon("key", "h-3.5 w-3.5")}</span>
-      <span class="font-semibold text-sky-300">orm</span><span class="truncate font-mono text-[11px] text-zinc-500">id · created_at · updated_at · deleted_at</span>
-      <button type="button" data-del title="Remove" class="ml-auto grid place-items-center rounded p-0.5 text-zinc-600 hover:bg-zinc-800 hover:text-red-400">${icon("x", "h-3.5 w-3.5")}</button>${LINK}</div>`);
+    for (const r of ntCols.querySelectorAll<HTMLElement>("[data-row]")) if (ORM.some((c) => c.name === cnameOf(r))) r.remove();
+    ORM.forEach(ntRow);
+    ntCols.prepend(...[...ntCols.children].slice(-ORM.length));
     ntPreview();
     if (save) ntSave();
   }
   const ntNewTable = () => {
     const n = ntCv.querySelectorAll("[data-box]").length;
-    ntAddBox({ name: "", x: 40 + (n % 6) * 40 + ntCv.scrollLeft, y: 40 + (n % 6) * 40 + ntCv.scrollTop, cols: [{ orm: true }, { name: "name", kind: "text", nn: true }] });
+    ntAddBox({ name: "", x: 40 + (n % 6) * 40 + ntCv.scrollLeft, y: 40 + (n % 6) * 40 + ntCv.scrollTop, cols: [...ORM, { name: "name", kind: "text", nn: true }] });
     ntNameIn()?.focus();
     ntSave();
   };
@@ -2638,7 +2807,7 @@ async function app() {
       e.preventDefault();
       const row = link.closest<HTMLElement>("[data-row]")!, src = tnameOf(box), col = cnameOf(row);
       if (!src || !col) return void bcMsg("Name the table and the column before linking", true);
-      const kind = row.dataset.orm !== undefined ? "int" : (row.querySelector<HTMLSelectElement>("[data-f=kind]")!.value as ColKind);
+      const kind = (row.querySelector<HTMLSelectElement>("[data-f=kind]")!.value as ColKind);
       const ay = midY(box, row), at = (m: PointerEvent) => {
         const r = ntCv.getBoundingClientRect();
         return [m.clientX - r.left + ntCv.scrollLeft, m.clientY - r.top + ntCv.scrollTop];
@@ -2704,7 +2873,7 @@ async function app() {
   $("#bc-nt-verify").onclick = () => {
     try {
       const { table, cols } = parseCreate(bcD, $<HTMLTextAreaElement>("#bc-nt-sqlin").value);
-      const box = ntBox!, before = tnameOf(box), oldCols = [...box.querySelectorAll<HTMLElement>("[data-row]")].flatMap((r) => (r.dataset.orm !== undefined ? ORM.map((o) => o.name) : [cnameOf(r)]));
+      const box = ntBox!, before = tnameOf(box), oldCols = [...box.querySelectorAll<HTMLElement>("[data-row]")].map(cnameOf);
       ntNameIn()!.value = table;
       ntNameIn()!.dataset.prev = slug(table);
       ntCols.innerHTML = "";
@@ -4086,6 +4255,7 @@ async function app() {
       return ["/basecurves", c.name, bcCurDb, bcCurSchema, tail].filter(Boolean).join("/");
     }
     if (s === "post") {
+      if (ptCur) return `/post/${ptCur}.json`;
       const u = postField("u").value.trim().replace(/^https?:\/\//, "");
       return u ? `/post/${postField("m").value} ${u}` : "/post";
     }
@@ -5098,6 +5268,18 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
   });
   const flow = createFlow(q("[data-flowbox]"), (text, step) => ctx.log(step ? "step" : "info", `[sim] ${text}`));
   const flowOn = () => !q("[data-flowbox]").classList.contains("hidden");
+  // The run being watched keeps its step lines, so its Flow can be redrawn (with progress) after
+  // looking at another deployment; lines only light up the Flow while it shows that deployment.
+  type LiveRun = { name: string; steps: [string | undefined, number][]; end?: [boolean, number] };
+  let live: LiveRun | null = null;
+  let flowName: string | null = null; // the deployment the Flow is drawn for
+  const sink = (name: string): FlowSink => {
+    const run: LiveRun = (live = { name, steps: [] });
+    return {
+      step: (t) => { run.steps.push([t, Date.now()]); if (flowName === name) flow.step(t); },
+      end: (ok) => { run.end = [ok, Date.now()]; if (flowName === name) flow.end(ok); },
+    };
+  };
   /** Shows the form, the code editor or the flow, from the current mode / sh / flow state. */
   const layout = () => {
     const sh = shYaml !== null;
@@ -5113,6 +5295,11 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
     if (!on) return;
     const m = parseManifest(ed.get());
     flow.render(compile(m, { tag: "<tag>", discard: m.targets.map((t) => t.name), sudoPassword: "********" }), `${m.gitUrl} @ ${m.branch ? `branch ${m.branch}` : m.version}`);
+    flowName = current;
+    if (live?.name === current) {
+      live.steps.forEach(([t, at]) => flow.step(t, at));
+      if (live.end) flow.end(...live.end);
+    }
   };
 
   const validate = () => {
@@ -5178,15 +5365,17 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
     setMode(localStorage.deployMode === "yaml" ? "yaml" : "easy", false); // the form falls back to YAML if it can't read the file
     if (!q("[data-err]").textContent) validate();
     if (name && running.has(name) && !busy) watch(name);
+    else if (name && busy && live?.name === name && validate()) showFlow(true); // back to the one being watched
   }
 
   /** Re-attaches to a deploy still running on the machine (e.g. started before the connection dropped). */
   async function watch(name: string) {
     ctx.log("info", `[${name}] still deploying on the machine, following its log…`);
+    const s = sink(name);
     if (validate()) showFlow(true);
     setBusy(true);
     try {
-      await followDeploy(ctx, name, flow);
+      await followDeploy(ctx, name, s);
     } finally {
       setBusy(false);
     }
@@ -5423,11 +5612,14 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
     if (busy) return;
     if (shYaml !== null) showYaml();
     if (!validate()) return;
+    const name = parseManifest(ed.get()).name;
+    setCurrent(name);
+    const s = sink(name);
     showFlow(true); // watch the steps light up while it runs
     setBusy(true);
     try {
       const p = await prepareDeploy(ctx, ed.get(), true);
-      if (p) await runDeploy(ctx, p, flow);
+      if (p) await runDeploy(ctx, p, s);
     } finally {
       setBusy(false);
     }
@@ -5470,9 +5662,9 @@ function deployPage(ctx: DeployCtx, root: HTMLElement) {
       for (const name of launched) {
         qstate.set(name, "run");
         paintQueue();
-        const here = name === current;
-        if (here) showFlow(true);
-        const code = await followDeploy(ctx, name, here ? flow : undefined);
+        const s = sink(name);
+        if (name === current) showFlow(true);
+        const code = await followDeploy(ctx, name, s);
         if (code === null) { lost = true; break; } // connection lost: the rest keeps going on the machine
         qstate.set(name, code === 0 ? "ok" : code === QUEUE_SKIPPED ? "skip" : "fail");
         if (code === 0) ok++;

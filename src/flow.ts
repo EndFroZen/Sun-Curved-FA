@@ -301,13 +301,12 @@ export function createFlow(box: HTMLElement, log: (text: string, step: boolean) 
     ended = 0;
   }
   /** Step `i` starts: the running one is done, the ones jumped over were in a branch that didn't run. */
-  function begin(i: number) {
+  function begin(i: number, now = Date.now()) {
     if (at < 0) {
       reset();
-      t0 = Date.now();
+      t0 = now;
     }
     if (i >= steps.length) return;
-    const now = Date.now();
     if (at >= 0 && st[at] === "run") (st[at] = "ok"), (stopped[at] = now);
     for (let k = Math.max(at + 1, 0); k < i; k++) st[k] = "skip";
     st[i] = "run";
@@ -317,8 +316,8 @@ export function createFlow(box: HTMLElement, log: (text: string, step: boolean) 
     follow = true;
     box.querySelector(`.flow-pane-${view} [data-i="${i}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
-  function finish(ok: boolean) {
-    ended = Date.now();
+  function finish(ok: boolean, now = Date.now()) {
+    ended = now;
     if (at >= 0 && st[at] === "run") (st[at] = ok ? "ok" : "fail"), (stopped[at] = ended);
     if (ok) for (let k = at + 1; k < steps.length; k++) st[k] = "skip";
     paint();
@@ -374,6 +373,7 @@ export function createFlow(box: HTMLElement, log: (text: string, step: boolean) 
     render(script: string, head: string) {
       gen++;
       clearInterval(timer);
+      live = false;
       steps = flowSteps(script);
       reset();
       const hasIf = steps.some((s) => flowKind(s) === "if");
@@ -458,15 +458,15 @@ export function createFlow(box: HTMLElement, log: (text: string, step: boolean) 
         c.onkeydown = (e) => void ((e.key === "Enter" || e.key === " ") && (e.preventDefault(), flip()));
       });
     },
-    /** Real deploy printed a `==> title` line. */
-    step(title?: string) {
+    /** Real deploy printed a `==> title` line (`now`: when, for replaying an earlier line). */
+    step(title?: string, now = Date.now()) {
       gen++;
       if (!live) (at = -1), (live = true); // a new real run (stops a simulation, forgets an earlier run)
-      begin(nextStep(steps, at, title));
+      begin(nextStep(steps, at, title), now);
     },
-    end(ok: boolean) {
+    end(ok: boolean, now = Date.now()) {
       live = false;
-      finish(ok);
+      finish(ok, now);
     },
   };
 }
