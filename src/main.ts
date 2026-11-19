@@ -1081,9 +1081,10 @@ async function app() {
           <div class="flex min-h-0 flex-1 flex-col rounded-2xl border border-zinc-800 bg-zinc-900">
             <div class="flex items-center gap-4 border-b border-zinc-800 px-4 py-2 text-sm">
               <span class="font-semibold">Response</span><span id="post-meta" class="font-mono text-xs text-zinc-400"></span>
-              <button type="button" id="post-tab" class="ml-auto rounded-md px-2 py-0.5 text-xs text-zinc-400 hover:bg-zinc-800">Headers</button>
+              <div id="post-tab" class="ml-auto flex gap-1">${["Pretty", "Raw", "Preview", "Headers"].map((v) => `<button type="button" data-v="${v}" class="rounded-md px-2 py-0.5 text-xs text-zinc-400 hover:bg-zinc-800">${v}</button>`).join("")}</div>
             </div>
             <pre id="post-out" class="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all p-4 font-mono text-sm"></pre>
+            <iframe id="post-view" sandbox="" class="hidden min-h-0 flex-1 rounded-b-2xl border-0 bg-white"></iframe>
           </div>
         </form>
       </div>
@@ -1373,13 +1374,17 @@ async function app() {
   const postPage = $("#post"), postForm = $<HTMLFormElement>("#post-form");
   let postHist: PostReq[] = [];
   try { postHist = JSON.parse(localStorage.postHist ?? "[]"); } catch {} // corrupt → start empty
-  let postRes = { body: "", heads: "" }, postShowHeads = false;
+  let postRes = { body: "", heads: "" }, postView = "Pretty";
   const postField = (n: string) => postForm.elements.namedItem(n) as HTMLInputElement;
   postForm.addEventListener("input", showWhere); // path shows the method + URL being edited
   postForm.addEventListener("change", showWhere);
   const drawPostOut = () => {
-    $("#post-out").textContent = postShowHeads ? postRes.heads : postRes.body;
-    $("#post-tab").textContent = postShowHeads ? "Body" : "Headers";
+    const prev = postView === "Preview", frame = $<HTMLIFrameElement>("#post-view");
+    $("#post-out").textContent = postView === "Headers" ? postRes.heads : postView === "Pretty" ? pretty(postRes.body) : postRes.body;
+    $("#post-out").classList.toggle("hidden", prev);
+    frame.classList.toggle("hidden", !prev);
+    if (prev && frame.srcdoc !== postRes.body) frame.srcdoc = postRes.body; // sandbox="" → no scripts run
+    $("#post-tab").querySelectorAll<HTMLElement>("[data-v]").forEach((b) => b.classList.toggle("bg-zinc-800", b.dataset.v === postView));
   };
   const drawHist = () => {
     $("#post-hist").innerHTML = postHist.map((r, i) => `<li data-h="${i}" title="${esc(r.u)}" class="flex cursor-pointer gap-2 rounded-lg px-2 py-1.5 font-mono text-xs hover:bg-zinc-800">
@@ -1507,7 +1512,10 @@ async function app() {
 
   $("[data-post]").onclick = () => (drawHist(), void ptLoad(), postPage.classList.replace("hidden", "flex"), postField("u").focus());
   $("#post-close").onclick = () => postPage.classList.replace("flex", "hidden");
-  $("#post-tab").onclick = () => ((postShowHeads = !postShowHeads), drawPostOut());
+  $("#post-tab").onclick = (e) => {
+    const v = (e.target as HTMLElement).closest<HTMLElement>("[data-v]")?.dataset.v;
+    if (v) (postView = v), drawPostOut();
+  };
   $("#post-clear").onclick = () => ((postHist = []), (localStorage.postHist = "[]"), drawHist());
   $("#post-hist").onclick = (e) => {
     const r = postHist[+((e.target as HTMLElement).closest<HTMLElement>("[data-h]")?.dataset.h ?? -1)];
@@ -1527,13 +1535,14 @@ async function app() {
       const res = await httpFetch(r.u, { method: r.m, headers: parseHeaders(r.h), body: ["GET", "HEAD"].includes(r.m) || !r.b ? undefined : r.b });
       const text = await res.text();
       meta.innerHTML = `<span class="${res.ok ? "text-emerald-400" : "text-red-400"}">${res.status} ${esc(res.statusText)}</span> · ${Math.round(performance.now() - t0)} ms · ${fmtSize(new Blob([text]).size)}`;
-      postRes = { body: pretty(text), heads: [...res.headers].map(([k, v]) => `${k}: ${v}`).join("\n") };
+      postRes = { body: text, heads: [...res.headers].map(([k, v]) => `${k}: ${v}`).join("\n") };
+      postView = /html/i.test(res.headers.get("content-type") ?? "") ? "Preview" : "Pretty";
     } catch (err) {
       meta.innerHTML = `<span class="text-red-400">Error</span>`;
       postRes = { body: String(err), heads: "" };
+      postView = "Raw";
     }
     send.disabled = false;
-    postShowHeads = false;
     drawPostOut();
   };
 
@@ -1798,20 +1807,57 @@ async function app() {
     npSideDraw();
   };
   const npPinItem = (x: Note | string): MenuItem => npPins.includes(npKey(x)) ? ["Unpin", "x", () => npTogglePin(x)] : ["Pin to sidebar", "plus", () => npTogglePin(x)];
+  // per note/folder look (any colour + any Lucide icon), keyed like pins ("n:<id>" | "d:<name>")
+  type Look = { color?: string; icon?: string };
+  let npLooks: Record<string, Look> = {};
+  try { npLooks = JSON.parse(localStorage.notepadLook ?? "{}"); } catch {}
+  const npLook = (x: Note | string): Look => {
+    const l = npLooks[npKey(x)] ?? {};
+    return { color: /^#[0-9a-f]{6}$/i.test(l.color ?? "") ? l.color : undefined, icon: l.icon }; // only a hex reaches the SVG
+  };
+  const npSetLook = (k: string, patch: Look) => {
+    const l = { ...npLooks[k], ...patch };
+    (Object.keys(l) as (keyof Look)[]).forEach((p) => l[p] || delete l[p]);
+    if (Object.keys(l).length) npLooks[k] = l; else delete npLooks[k];
+    localStorage.notepadLook = JSON.stringify(npLooks);
+    npDraw();
+  };
+  const npLookItems = (x: Note | string, e: MouseEvent): MenuItem[] => {
+    const k = npKey(x);
+    return [
+      ["Color…", "pencil", () => {
+        // native picker, anchored where the right-click was
+        const i = Object.assign(document.createElement("input"), { type: "color", value: npLook(x).color ?? (typeof x === "string" ? "#f5c542" : "#fbbf24") });
+        i.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;width:1px;height:1px;opacity:0;pointer-events:none`;
+        document.body.append(i);
+        i.oninput = () => npSetLook(k, { color: i.value });
+        i.onchange = i.onblur = () => i.remove();
+        i.click();
+      }],
+      ["Icon…", "image", async () => {
+        const v = await pickIcon();
+        if (v !== null) npSetLook(k, { icon: v });
+      }],
+      ...(npLooks[k] ? [["Reset color & icon", "x", () => npSetLook(k, { color: "", icon: "" })] as MenuItem] : []),
+    ];
+  };
   const npSideDraw = () => {
     const byId = new Map(notes.map((n) => [n.id, n]));
     npPins = npPins.filter((p) => (p[0] === "d" ? npDirs.includes(p.slice(2)) : byId.has(+p.slice(2)))); // drop deleted ones
     npRecent = npRecent.filter((id) => byId.has(id));
-    const row = (attr: string, ic: string, name: string, sub: string, on: boolean) =>
-      `<button ${attr} class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left ${on ? "bg-amber-500/15 text-amber-400" : "hover:bg-zinc-800"}">
-        ${icon(ic as keyof typeof ICONS, `h-4 w-4 shrink-0 ${ic === "folder" ? "text-amber-400" : "text-zinc-400"}`)}
+    // same 3D icons (and picked colour/icon) as the grid, just small
+    const row = (attr: string, art: string, name: string, sub: string, on: boolean) =>
+      `<button ${attr} class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1 text-left ${on ? "bg-amber-500/15 text-amber-400" : "hover:bg-zinc-800"}">
+        ${art}
         <span class="min-w-0 flex-1 truncate text-sm">${esc(name)}</span>${sub ? `<span class="shrink-0 font-mono text-[10px] text-zinc-500">${sub}</span>` : ""}</button>`;
+    const dirArt = (d: string) => npFolderSvg(notes.filter((n) => n.folder === d).length, npLook(d), NP_SMALL);
+    const noteArt = (n: Note) => npNoteSvg(npLook(n), NP_SMALL);
     const head = (t: string) => `<p class="px-2.5 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-zinc-500">${t}</p>`;
     const pins = npPins.map((p) =>
       p[0] === "d"
-        ? row(`data-sdir="${esc(p.slice(2))}"`, "folder", p.slice(2), "", npDir === p.slice(2) && !npOpen)
-        : row(`data-sn="${p.slice(2)}"`, "file", byId.get(+p.slice(2))!.name, "", npOpen?.id === +p.slice(2)));
-    const recent = npRecent.map((id) => byId.get(id)!).map((n) => row(`data-sn="${n.id}"`, "file", n.name, new Date(n.t).toLocaleTimeString("sv").slice(0, 5), npOpen?.id === n.id));
+        ? row(`data-sdir="${esc(p.slice(2))}"`, dirArt(p.slice(2)), p.slice(2), "", npDir === p.slice(2) && !npOpen)
+        : row(`data-sn="${p.slice(2)}"`, noteArt(byId.get(+p.slice(2))!), byId.get(+p.slice(2))!.name, "", npOpen?.id === +p.slice(2)));
+    const recent = npRecent.map((id) => byId.get(id)!).map((n) => row(`data-sn="${n.id}"`, noteArt(n), n.name, new Date(n.t).toLocaleTimeString("sv").slice(0, 5), npOpen?.id === n.id));
     $("#np-side").innerHTML =
       head("Pinned") + (pins.join("") || `<p class="px-2.5 py-1 text-xs text-zinc-600">Right-click a note or folder → Pin</p>`) +
       `<div class="my-2 border-t border-zinc-800"></div>` +
@@ -1870,31 +1916,39 @@ async function app() {
   const npPaper = (x: number, r: number) =>
     `<g transform="rotate(${r} ${x + 14} 40)"><rect x="${x}" y="9" width="28" height="36" rx="2" fill="#fff" stroke="#d4d4d8" stroke-width=".6"/>
      <path d="M${x + 5} 16h18M${x + 5} 21h14M${x + 5} 26h18M${x + 5} 31h11" stroke="#a1a1aa" stroke-width="1.6" stroke-linecap="round"/></g>`;
-  const npFolderSvg = (count: number) => {
-    const k = ++npSeq;
-    return `<svg viewBox="0 0 64 56" class="h-20 w-20 drop-shadow-[0_6px_8px_rgb(0_0_0/0.18)]" aria-hidden="true">
+  // stop colour: the default hex, or the picked colour mixed toward white/black
+  const npStop = (o: string, def: string, c: string | undefined, to: string, pct: number) =>
+    `<stop offset="${o}" style="stop-color:${c ? `color-mix(in srgb, ${c} ${pct}%, ${to})` : def}"/>`;
+  // the picked Lucide icon laid over the big icon (top = vertical centre in %)
+  // [svg class, overlaid icon class]: the grid's big icon, or the sidebar's small one
+  const NP_BIG = ["h-20 w-20 drop-shadow-[0_6px_8px_rgb(0_0_0/0.18)]", "h-7 w-7"], NP_SMALL = ["h-6 w-6 drop-shadow-[0_1px_2px_rgb(0_0_0/0.2)]", "h-2.5 w-2.5"];
+  const npBadge = (svg: string, l: Look, top: number, cls: string, color: string, sz: string[]) =>
+    l.icon ? `<span class="relative shrink-0">${svg}<span class="absolute left-1/2 -translate-x-1/2 -translate-y-1/2 ${cls}" style="top:${top}%;${color && `color:${color}`}">${lucide(l.icon, sz[1])}</span></span>` : svg;
+  const npFolderSvg = (count: number, l: Look = {}, sz = NP_BIG) => {
+    const k = ++npSeq, c = l.color;
+    return npBadge(`<svg viewBox="0 0 64 56" class="${sz[0]} shrink-0" aria-hidden="true">
       <defs>
-        <linearGradient id="npfb${k}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f5c542"/><stop offset="1" stop-color="#d99a0b"/></linearGradient>
-        <linearGradient id="npff${k}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffe9a3"/><stop offset=".55" stop-color="#fcd25a"/><stop offset="1" stop-color="#f0b429"/></linearGradient>
+        <linearGradient id="npfb${k}" x1="0" y1="0" x2="0" y2="1">${npStop("0", "#f5c542", c, "black", 90)}${npStop("1", "#d99a0b", c, "black", 70)}</linearGradient>
+        <linearGradient id="npff${k}" x1="0" y1="0" x2="0" y2="1">${npStop("0", "#ffe9a3", c, "white", 45)}${npStop(".55", "#fcd25a", c, "white", 80)}${npStop("1", "#f0b429", c, "white", 100)}</linearGradient>
       </defs>
       <path d="M5 6a3 3 0 0 1 3-3h15l5 5h28a3 3 0 0 1 3 3v38a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3Z" fill="url(#npfb${k})"/>
       ${count > 1 ? npPaper(26, 7) : ""}${count > 0 ? npPaper(16, -4) : ""}
       <path d="M3 22a3 3 0 0 1 3-3h52a3 3 0 0 1 3 3.3l-2.6 26.4A3 3 0 0 1 55.4 51H8.6a3 3 0 0 1-3-2.7Z" fill="url(#npff${k})"/>
       <path d="M6.5 20.5h51" stroke="#fff" stroke-opacity=".75" stroke-width="1.2" stroke-linecap="round"/>
-    </svg>`;
+    </svg>`, l, 64, "text-white drop-shadow-[0_1px_2px_rgb(0_0_0/0.45)]", "", sz);
   };
-  const npNoteSvg = () => {
-    const k = ++npSeq;
-    return `<svg viewBox="0 0 64 64" class="h-20 w-20 drop-shadow-[0_6px_8px_rgb(0_0_0/0.18)]" aria-hidden="true">
+  const npNoteSvg = (l: Look = {}, sz = NP_BIG) => {
+    const k = ++npSeq, c = l.color;
+    return npBadge(`<svg viewBox="0 0 64 64" class="${sz[0]} shrink-0" aria-hidden="true">
       <defs>
         <linearGradient id="npn${k}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#e7e5e4"/></linearGradient>
-        <linearGradient id="npc${k}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fde68a"/><stop offset="1" stop-color="#f59e0b"/></linearGradient>
+        <linearGradient id="npc${k}" x1="0" y1="0" x2="1" y2="1">${npStop("0", "#fde68a", c, "white", 50)}${npStop("1", "#f59e0b", c, "black", 90)}</linearGradient>
       </defs>
       <path d="M14 4h26l12 12v42a3 3 0 0 1-3 3H14a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3Z" fill="url(#npn${k})" stroke="#d6d3d1" stroke-width=".8"/>
-      <rect x="11.4" y="4.4" width="28" height="7" rx="2.6" fill="#fbbf24" opacity=".9"/>
+      <rect x="11.4" y="4.4" width="28" height="7" rx="2.6" fill="${c ?? "#fbbf24"}" opacity=".9"/>
       <path d="M40 4v9a3 3 0 0 0 3 3h9Z" fill="url(#npc${k})"/>
-      <path d="M18 24h22M18 30h26M18 36h20M18 42h26M18 48h14" stroke="#a8a29e" stroke-width="2" stroke-linecap="round"/>
-    </svg>`;
+      ${l.icon ? "" : `<path d="M18 24h22M18 30h26M18 36h20M18 42h26M18 48h14" stroke="#a8a29e" stroke-width="2" stroke-linecap="round"/>`}
+    </svg>`, l, 58, "", c ?? "#d97706", sz);
   };
   const npDraw = () => {
     notes.sort((a, b) => b.t - a.t);
@@ -1904,11 +1958,11 @@ async function app() {
       ? dirs.map((d) => {
           const k = notes.filter((n) => n.folder === d).length;
           return `<button data-dir="${esc(d)}" title="${esc(d)} · ${k} notes" class="flex flex-col items-center gap-1 rounded-xl border border-transparent p-2 text-center transition hover:border-amber-500/40 hover:bg-amber-500/10 focus-visible:border-amber-500/60 focus-visible:outline-none">
-            ${npFolderSvg(k)}
+            ${npFolderSvg(k, npLook(d))}
             <span class="line-clamp-2 w-full break-words text-xs">${esc(d)}</span></button>`;
         }).join("") +
         here.map(([n, i]) => `<button data-n="${i}" class="flex flex-col items-center gap-1 rounded-xl border border-transparent p-2 text-center transition hover:border-amber-500/40 hover:bg-amber-500/10 focus-visible:border-amber-500/60 focus-visible:outline-none">
-            ${npNoteSvg()}
+            ${npNoteSvg(npLook(n))}
             <span class="line-clamp-2 w-full break-words text-xs">${esc(n.name)}</span></button>`).join("")
       : `<p class="col-span-full grid h-60 place-items-center text-sm text-zinc-500">${npDir ? "Empty folder. Press New to add a note here." : "No notes yet. Press New or right-click → New note."}</p>`;
     npSideDraw(); // names/moves/deletes show in the sidebar too
@@ -1946,6 +2000,7 @@ async function app() {
     notes.forEach((n) => n.folder === d && (n.folder = name));
     npPins = npPins.map((p) => (p === `d:${d}` ? `d:${name}` : p));
     npSaveSide();
+    if (npLooks[`d:${d}`]) (npLooks[`d:${name}`] = npLooks[`d:${d}`]), npSetLook(`d:${d}`, { color: "", icon: "" }); // look follows the rename
     npDraw();
   };
   // move and/or rename a note's file; the name gets " (2)" if the target folder already has it
@@ -2039,6 +2094,7 @@ async function app() {
           ["Open", "file", () => npShow(n)],
           npPinItem(n),
           ["Rename…", "pencil", () => npRename(n)],
+          ...npLookItems(n, e),
           ...npMoveItems(n),
           ["New note", "plus", npNew],
           ["Delete", "trash", async () => {
@@ -2054,6 +2110,7 @@ async function app() {
             ["Open", "folder", () => npOpenDir(d)],
             npPinItem(d),
             ["Rename…", "pencil", () => npRenameDir(d)],
+            ...npLookItems(d, e),
             ["Delete folder", "trash", async () => {
               const k = notes.filter((n) => n.folder === d).length;
               if (!(await confirmBox("Delete folder?", `${d}${k ? ` (its ${k} notes move to the top level)` : ""}`, "Delete"))) return;
